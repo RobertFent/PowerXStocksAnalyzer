@@ -1,6 +1,105 @@
 from yahoo_fin.stock_info import get_data, tickers_nasdaq, tickers_dow, tickers_sp500
+from tqdm import tqdm
 import pandas as pd
 from datetime import datetime, timedelta
+import requests
+from bs4 import BeautifulSoup
+import ftplib
+import io
+
+# only stocks below 80 bucks
+MAX_STOCKPRICE = 80
+# only stocks with at least this volume
+MIN_VOLUME = 1000000
+# value of my deposit
+DEPOSIT_VALUE=10000
+
+BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/"
+
+def get_sp500_symbols():
+    url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    table = soup.find('table', {'class': 'wikitable sortable'})
+    symbols = []
+
+    for row in table.findAll('tr')[1:]:
+        symbol = row.findAll('td')[0].text.strip()
+        symbols.append(symbol)
+
+    return symbols
+
+def get_nasdaq_symbols():
+    ftp = ftplib.FTP("ftp.nasdaqtrader.com")
+    ftp.login()
+    ftp.cwd("SymbolDirectory")
+    
+    r = io.BytesIO()
+    ftp.retrbinary('RETR nasdaqlisted.txt', r.write)
+    
+    info = r.getvalue().decode()
+    splits = info.split("|")
+    
+    
+    symbols = [x for x in splits if "\r\n" in x]
+    symbols = [x.split("\r\n")[1] for x in symbols if "NASDAQ" not in x != "\r\n"]
+    symbols = [ticker for ticker in symbols if "File" not in ticker]    
+    
+    ftp.close()    
+
+    return symbols
+
+def get_dow_jones_symbols():
+    url = 'https://www.investing.com/indices/us-30-components'
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    table = soup.find('table', {'id': 'cr1'})
+
+    symbols = []
+
+    for row in table.findAll('tr'):
+        symbol = row.find('td', {'class': 'bold left noWrap elp name'}).text.strip()
+        symbols.append(symbol)
+
+    return symbols
+
+# todo
+#dow_jones_symbols = get_dow_jones_symbols()
+#print(dow_jones_symbols)
+
+
+def get_ticker_data(ticker):
+    current_date, past_date = get_dates()
+    url = BASE_URL + ticker
+    params = {
+        "period1": int(pd.Timestamp(past_date).timestamp()),
+        "period2": int(pd.Timestamp(current_date).timestamp()),
+        "interval": "1d",
+        #"events": "div,splits"
+    }
+
+    # send request
+    response = requests.get(url, params, headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'})
+
+    # get JSON response
+    data = response.json()
+
+    # get open / high / low / close data
+    frame = pd.DataFrame(data["chart"]["result"][0]["indicators"]["quote"][0])
+
+    # get the date info
+    temp_time = data["chart"]["result"][0]["timestamp"]
+    
+    # add time
+    frame.index = pd.to_datetime(temp_time, unit = "s")
+    frame.index = frame.index.map(lambda dt: dt.floor("d"))
+
+    # reorder frame
+    frame = frame[["open", "high", "low", "close", "volume"]]
+    frame['ticker'] = ticker.upper()
+
+    return frame
+
 
 # MACD
 def add_macd_data(dataframe):
@@ -9,13 +108,6 @@ def add_macd_data(dataframe):
 
     macd_line= ema_12 - ema_26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    # macd_histogram = macd_line - signal_line
-
-    # macd_df = pd.DataFrame({
-    #     'MACD Line': macd_line,
-    #     'Signal Line': signal_line,
-    #     'MACD Histogram': macd_histogram
-    # })
 
     dataframe['MACD Line'] = macd_line
     dataframe['Signal Line'] = signal_line
@@ -58,14 +150,11 @@ def add_stochastic_slow(dataframe):
     dataframe['%K'] = percent_k
     dataframe['%D'] = percent_d
 
-    # todo: get this right
-    # print(lowest_low.values)
-
-def get_dates():
+def get_dates(format='%m/%d/%Y'):
     current_date = datetime.now()
-    formated_date = current_date.strftime("%m/%d/%Y")
+    formated_date = current_date.strftime(format)
     past_month_date = current_date - timedelta(days=30)
-    formated_past_month_date = past_month_date.strftime("%m/%d/%Y")
+    formated_past_month_date = past_month_date.strftime(format)
     return formated_date, formated_past_month_date
 
 def add_color_of_days(dataframe):
@@ -114,24 +203,52 @@ def add_color_of_days(dataframe):
     
     dataframe['color'] = colors
 
-def print_if_winner(dataframe):
+def is_winner(dataframe):
     # current day should be green and the day before not
-    if (dataframe.iloc[[len(dataframe)-1]]['color'].item() == 'green' and dataframe.iloc[[len(dataframe)-2]]['color'].item() != 'green'):
-        print(dataframe)
-        print('Winner: ' + dataframe.iloc[[len(dataframe)-1]]['ticker'].item())
-            
+    return (dataframe.iloc[[len(dataframe)-1]]['color'].item() == 'green' and
+            dataframe.iloc[[len(dataframe)-2]]['color'].item() != 'green' and
+            dataframe.iloc[[len(dataframe)-1]]['close'].item() < MAX_STOCKPRICE and
+            dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME)
 
 
-def main():
-    current_date, past_date = get_dates()
+# todo: test if correct
+def add_order_values(dataframe):
     
-    loops = 0
-    for ticker in tickers_nasdaq():
-        loops += 1
-        print(ticker)
-        # get data starting past month and ending current date
-        ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
+    adr = [None, None, None, None, None, None]
+    entry = [None, None, None, None, None, None]
+    stop_loss = [None, None, None, None, None, None]
+    limit_order = [None, None, None, None, None, None]
+    
+    for i in range(len(dataframe)):
+        # print(dataframe.iloc[[i]])
+        if(i > 5):
+            sum_values = 0
+            for j in range(i-7, i):
+                sum_values += dataframe.iloc[[j]]['high'].item() - dataframe.iloc[[j]]['low'].item()
+            
+            current_adr = sum_values / 7
+            # entry for next day
+            next_entry = dataframe.iloc[[i]]['high'].item() + 0.01
 
+            adr.append(current_adr)
+            entry.append(next_entry)
+            stop_loss.append(next_entry - 1.5 * current_adr)
+            limit_order.append(next_entry + 3 * current_adr)
+
+    dataframe['ADR'] = adr
+    dataframe['Next-Entry'] = entry
+    dataframe['Stop-Loss'] = stop_loss
+    dataframe['Limit-Order'] = limit_order
+
+    # todo: add how many shares to buy
+
+def analyze_ticker(ticker):
+    current_date, past_date = get_dates()
+
+    try:
+        # get data starting past month and ending current date
+        # ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
+        ticker_data = get_ticker_data(ticker)
         # add needed values
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
@@ -140,8 +257,81 @@ def main():
         # add color of days
         add_color_of_days(ticker_data)
 
+        return ticker_data
+    
+    except Exception:
+            pass
+
+            
+def get_winners():
+    
+    winning_stocks = []
+    iter = 0
+
+    print('Analyzing NASDAQ...')
+    for ticker in tqdm(get_nasdaq_symbols()):
+
+        iter += 1
+        ticker_data = analyze_ticker(ticker)
+
+        
+        #if (iter > 250): break
+
         # check for buy condition
-        print_if_winner(ticker_data)
-        if loops == 20: break
+        if (ticker_data is not None and is_winner(ticker_data)):
+            winning_stocks.append(ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
+            # add_order_values(ticker_data)
+            # print(ticker_data)
+            # print('Winner: ' + ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
+        
+        #if (iter > 199): break
+        
+    print('%d stocks in NASDAQ analyzed' % iter)
+
+
+    iter = 0
+    print('Analyzing S&P 500...')
+    for ticker in tqdm(get_sp500_symbols()):
+        iter += 1
+
+        ticker_data = analyze_ticker(ticker)
+
+        # check for buy condition
+        if (is_winner(ticker_data)):
+            winning_stocks.append(ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
+    
+    print('%d stocks in S&P 500 analyzed' % iter)
+    
+    return winning_stocks
+
+def get_info(ticker):
+    current_date, past_date = get_dates()
+
+    try:
+        ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
+        add_order_values(ticker_data)
+
+        # debug
+        # add needed values
+        add_macd_data(ticker_data)
+        add_rsi_data(ticker_data)
+        add_stochastic_slow(ticker_data)
+
+        # add color of days
+        add_color_of_days(ticker_data)
+
+        print(ticker_data)
+    except Exception as e:
+        print(str(e))
+    
+
+def main():
+    choice = input('Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in buy zone or {ticker symbol}: get specific info of a given symbol?: ')
+    if choice == '1':
+        winners = get_winners()
+        print(winners)
+    else:
+        get_info(choice)
+
 
 main()
