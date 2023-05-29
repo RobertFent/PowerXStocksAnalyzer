@@ -6,6 +6,8 @@ import requests
 from bs4 import BeautifulSoup
 import ftplib
 import io
+import concurrent.futures
+import threading
 
 # only stocks below 80 bucks
 MAX_STOCKPRICE = 80
@@ -13,8 +15,12 @@ MAX_STOCKPRICE = 80
 MIN_VOLUME = 1000000
 # value of my deposit
 DEPOSIT_VALUE=10000
-
+# url of API
 BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/"
+
+
+winning_stocks = []
+LOCK = threading.Lock()
 
 def get_sp500_symbols():
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -133,6 +139,7 @@ def add_rsi_data(dataframe):
     dataframe['RSI'] = rsi
 
 
+# todo: not always the most accurate result for %K
 # stochastic slow
 def add_stochastic_slow(dataframe):
 
@@ -145,7 +152,7 @@ def add_stochastic_slow(dataframe):
     # Calculate %K
     percent_k = ((dataframe['close'] - lowest_low) / (highest_high - lowest_low)) * 100
     # Calculate %D (3-day simple moving average of %K)
-    percent_d = percent_k.rolling(window=3).mean()
+    percent_d = percent_k.rolling(window=3, min_periods=0).mean()
 
     dataframe['%K'] = percent_k
     dataframe['%D'] = percent_d
@@ -218,6 +225,7 @@ def add_order_values(dataframe):
     entry = [None, None, None, None, None, None]
     stop_loss = [None, None, None, None, None, None]
     limit_order = [None, None, None, None, None, None]
+    shares_to_buy = [None, None, None, None, None, None]
     
     for i in range(len(dataframe)):
         # print(dataframe.iloc[[i]])
@@ -226,21 +234,28 @@ def add_order_values(dataframe):
             for j in range(i-7, i):
                 sum_values += dataframe.iloc[[j]]['high'].item() - dataframe.iloc[[j]]['low'].item()
             
+            # adr of current day
             current_adr = sum_values / 7
             # entry for next day
             next_entry = dataframe.iloc[[i]]['high'].item() + 0.01
-
+            # stop_loss and limit order
+            stop_loss_current_day = next_entry - 1.5 * current_adr
+            limit_order_current_day = next_entry + 3 * current_adr
+            # max amount of shares to buy to not loose more than 2% of depot in case stop-loss triggeres
+            max_shares_current_day = (DEPOSIT_VALUE*0.02) / (next_entry - stop_loss_current_day)
+            shares_to_buy.append(max_shares_current_day)
             adr.append(current_adr)
             entry.append(next_entry)
-            stop_loss.append(next_entry - 1.5 * current_adr)
-            limit_order.append(next_entry + 3 * current_adr)
+            stop_loss.append(stop_loss_current_day)
+            limit_order.append(limit_order_current_day)
+
+            # todo: option prices
 
     dataframe['ADR'] = adr
     dataframe['Next-Entry'] = entry
     dataframe['Stop-Loss'] = stop_loss
     dataframe['Limit-Order'] = limit_order
-
-    # todo: add how many shares to buy
+    dataframe['Max-Shares'] = shares_to_buy
 
 def analyze_ticker(ticker):
     current_date, past_date = get_dates()
@@ -261,8 +276,80 @@ def analyze_ticker(ticker):
     
     except Exception:
             pass
+    
+def analyze_ticker_wrapper(ticker):
+    ticker_data = analyze_ticker(ticker)
+    if ticker_data is not None and is_winner(ticker_data):
+        return ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item()
 
-            
+def analyze_stocks(tickers):
+    global winning_stocks
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        results = list(tqdm(executor.map(analyze_ticker_wrapper, tickers), total=len(tickers)))
+        with LOCK:
+            winning_stocks.extend([ticker for ticker in results if ticker is not None])
+
+
+def set_winners():
+    print('Analyzing NASDAQ...')
+    tickers = get_nasdaq_symbols()
+    # print(tickers)
+    analyze_stocks(tickers)
+    print('%d stocks in NASDAQ analyzed' % len(tickers))
+
+    print('Analyzing S&P500...')
+    tickers = get_sp500_symbols()
+    # print(tickers)
+    analyze_stocks(tickers)
+    print('%d stocks in S&P500 analyzed' % len(tickers))
+
+
+def get_info(ticker):
+    current_date, past_date = get_dates()
+
+    try:
+        ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
+        add_order_values(ticker_data)
+
+        # debug
+        # add needed values
+        # add_macd_data(ticker_data)
+        # add_rsi_data(ticker_data)
+        # add_stochastic_slow(ticker_data)
+
+        # add color of days
+        # add_color_of_days(ticker_data)
+
+        print(ticker_data)
+    except Exception as e:
+        print(str(e))
+    
+
+def main():
+    choice = input('Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in buy zone or {ticker symbol}: get specific info of a given symbol?: ')
+    if choice == '1':
+        set_winners()
+        print('Stocks in buy zone:\n' + ', '.join(winning_stocks) + '\nCheck out if the analysis is correct at: https://finance.yahoo.com')
+    else:
+        get_info(choice)
+
+
+main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+deprecated
 def get_winners():
     
     winning_stocks = []
@@ -275,7 +362,7 @@ def get_winners():
         ticker_data = analyze_ticker(ticker)
 
         
-        #if (iter > 250): break
+        # if (iter > 250): break
 
         # check for buy condition
         if (ticker_data is not None and is_winner(ticker_data)):
@@ -288,7 +375,6 @@ def get_winners():
         
     print('%d stocks in NASDAQ analyzed' % iter)
 
-
     iter = 0
     print('Analyzing S&P 500...')
     for ticker in tqdm(get_sp500_symbols()):
@@ -297,41 +383,10 @@ def get_winners():
         ticker_data = analyze_ticker(ticker)
 
         # check for buy condition
-        if (is_winner(ticker_data)):
+        if (ticker_data is not None and is_winner(ticker_data)):
             winning_stocks.append(ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
     
     print('%d stocks in S&P 500 analyzed' % iter)
-    
-    return winning_stocks
 
-def get_info(ticker):
-    current_date, past_date = get_dates()
-
-    try:
-        ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
-        add_order_values(ticker_data)
-
-        # debug
-        # add needed values
-        add_macd_data(ticker_data)
-        add_rsi_data(ticker_data)
-        add_stochastic_slow(ticker_data)
-
-        # add color of days
-        add_color_of_days(ticker_data)
-
-        print(ticker_data)
-    except Exception as e:
-        print(str(e))
-    
-
-def main():
-    choice = input('Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in buy zone or {ticker symbol}: get specific info of a given symbol?: ')
-    if choice == '1':
-        winners = get_winners()
-        print(winners)
-    else:
-        get_info(choice)
-
-
-main()
+    return winning_stocks  
+"""
