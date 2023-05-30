@@ -1,4 +1,3 @@
-from yahoo_fin.stock_info import get_data, tickers_nasdaq, tickers_dow, tickers_sp500
 from tqdm import tqdm
 import pandas as pd
 from datetime import datetime, timedelta
@@ -16,7 +15,7 @@ MIN_VOLUME = 1000000
 # value of my deposit
 DEPOSIT_VALUE=10000
 # url of API
-BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/"
+BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/'
 
 
 winning_stocks = []
@@ -36,20 +35,20 @@ def get_sp500_symbols():
     return symbols
 
 def get_nasdaq_symbols():
-    ftp = ftplib.FTP("ftp.nasdaqtrader.com")
+    ftp = ftplib.FTP('ftp.nasdaqtrader.com')
     ftp.login()
-    ftp.cwd("SymbolDirectory")
+    ftp.cwd('SymbolDirectory')
     
     r = io.BytesIO()
     ftp.retrbinary('RETR nasdaqlisted.txt', r.write)
     
     info = r.getvalue().decode()
-    splits = info.split("|")
+    splits = info.split('|')
     
     
-    symbols = [x for x in splits if "\r\n" in x]
-    symbols = [x.split("\r\n")[1] for x in symbols if "NASDAQ" not in x != "\r\n"]
-    symbols = [ticker for ticker in symbols if "File" not in ticker]    
+    symbols = [x for x in splits if '\r\n' in x]
+    symbols = [x.split('\r\n')[1] for x in symbols if 'NASDAQ' not in x != '\r\n']
+    symbols = [ticker for ticker in symbols if 'File' not in ticker]    
     
     ftp.close()    
 
@@ -78,10 +77,10 @@ def get_ticker_data(ticker):
     current_date, past_date = get_dates()
     url = BASE_URL + ticker
     params = {
-        "period1": int(pd.Timestamp(past_date).timestamp()),
-        "period2": int(pd.Timestamp(current_date).timestamp()),
-        "interval": "1d",
-        #"events": "div,splits"
+        'period1': int(pd.Timestamp(past_date).timestamp()),
+        'period2': int(pd.Timestamp(current_date).timestamp()),
+        'interval': '1d',
+        #'events': 'div,splits'
     }
 
     # send request
@@ -91,17 +90,17 @@ def get_ticker_data(ticker):
     data = response.json()
 
     # get open / high / low / close data
-    frame = pd.DataFrame(data["chart"]["result"][0]["indicators"]["quote"][0])
+    frame = pd.DataFrame(data['chart']['result'][0]['indicators']['quote'][0])
 
     # get the date info
-    temp_time = data["chart"]["result"][0]["timestamp"]
+    temp_time = data['chart']['result'][0]['timestamp']
     
     # add time
-    frame.index = pd.to_datetime(temp_time, unit = "s")
-    frame.index = frame.index.map(lambda dt: dt.floor("d"))
+    frame.index = pd.to_datetime(temp_time, unit = 's')
+    frame.index = frame.index.map(lambda dt: dt.floor('d'))
 
     # reorder frame
-    frame = frame[["open", "high", "low", "close", "volume"]]
+    frame = frame[['open', 'high', 'low', 'close', 'volume']]
     frame['ticker'] = ticker.upper()
 
     return frame
@@ -109,8 +108,8 @@ def get_ticker_data(ticker):
 
 # MACD
 def add_macd_data(dataframe):
-    ema_12 = dataframe["close"].ewm(span=12, adjust=False).mean()
-    ema_26 = dataframe["close"].ewm(span=26, adjust=False).mean()
+    ema_12 = dataframe['close'].ewm(span=12, adjust=False).mean()
+    ema_26 = dataframe['close'].ewm(span=26, adjust=False).mean()
 
     macd_line= ema_12 - ema_26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
@@ -251,7 +250,7 @@ def add_order_values(dataframe):
 
             # todo: option prices
 
-    dataframe['ADR'] = adr
+    # dataframe['ADR'] = adr
     dataframe['Next-Entry'] = entry
     dataframe['Stop-Loss'] = stop_loss
     dataframe['Limit-Order'] = limit_order
@@ -262,7 +261,7 @@ def analyze_ticker(ticker):
 
     try:
         # get data starting past month and ending current date
-        # ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
+        # ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval='1d')
         ticker_data = get_ticker_data(ticker)
         # add needed values
         add_macd_data(ticker_data)
@@ -308,19 +307,22 @@ def get_info(ticker):
     current_date, past_date = get_dates()
 
     try:
-        ticker_data = get_data(ticker, start_date=past_date, end_date=current_date, index_as_date = True, interval="1d")
+        ticker_data = get_ticker_data(ticker)
         add_order_values(ticker_data)
 
         # debug
         # add needed values
-        # add_macd_data(ticker_data)
-        # add_rsi_data(ticker_data)
-        # add_stochastic_slow(ticker_data)
+        add_macd_data(ticker_data)
+        add_rsi_data(ticker_data)
+        add_stochastic_slow(ticker_data)
 
         # add color of days
-        # add_color_of_days(ticker_data)
+        add_color_of_days(ticker_data)
+
+        ticker_data = ticker_data[['ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss', 'Limit-Order', 'Max-Shares', 'color']]
 
         print(ticker_data)
+        print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %(ticker, ticker))
     except Exception as e:
         print(str(e))
     
@@ -335,58 +337,3 @@ def main():
 
 
 main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-"""
-deprecated
-def get_winners():
-    
-    winning_stocks = []
-    iter = 0
-
-    print('Analyzing NASDAQ...')
-    for ticker in tqdm(get_nasdaq_symbols()):
-
-        iter += 1
-        ticker_data = analyze_ticker(ticker)
-
-        
-        # if (iter > 250): break
-
-        # check for buy condition
-        if (ticker_data is not None and is_winner(ticker_data)):
-            winning_stocks.append(ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
-            # add_order_values(ticker_data)
-            # print(ticker_data)
-            # print('Winner: ' + ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
-        
-        #if (iter > 199): break
-        
-    print('%d stocks in NASDAQ analyzed' % iter)
-
-    iter = 0
-    print('Analyzing S&P 500...')
-    for ticker in tqdm(get_sp500_symbols()):
-        iter += 1
-
-        ticker_data = analyze_ticker(ticker)
-
-        # check for buy condition
-        if (ticker_data is not None and is_winner(ticker_data)):
-            winning_stocks.append(ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item())
-    
-    print('%d stocks in S&P 500 analyzed' % iter)
-
-    return winning_stocks  
-"""
