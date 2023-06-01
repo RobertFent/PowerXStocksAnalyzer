@@ -7,13 +7,20 @@ import ftplib
 import io
 import concurrent.futures
 import threading
+import pytz
 
 # only stocks below 80 bucks
 MAX_STOCKPRICE = 80
-# only stocks with at least this volume
-MIN_VOLUME = 1000000
+# only stocks with at least this daily volume
+MIN_VOLUME = 20000000
 # value of my deposit
 DEPOSIT_VALUE=10000
+# RSI > 80 may indicate overbought -> use 85 because of difference to yahoos charts
+MAX_RSI = 85
+# RSI > 50 -> use 60 because of difference to yahoos charts
+MIN_RSI = 60
+# %K of stochastic slow should be over 50 -> use 60 because of difference to yahoos charts
+MIN_STOCH_K = 60
 # url of API
 BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/'
 
@@ -157,9 +164,15 @@ def add_stochastic_slow(dataframe):
     dataframe['%D'] = percent_d
 
 def get_dates(format='%m/%d/%Y'):
+    
     current_date = datetime.now()
-    formated_date = current_date.strftime(format)
-    past_month_date = current_date - timedelta(days=30)
+    est_timezone = pytz.timezone('US/Eastern')
+
+    # convert to est
+    current_date_est = current_date.astimezone(est_timezone)
+
+    formated_date = current_date_est.strftime(format)
+    past_month_date = current_date_est - timedelta(days=30)
     formated_past_month_date = past_month_date.strftime(format)
     return formated_date, formated_past_month_date
 
@@ -184,9 +197,9 @@ def add_color_of_days(dataframe):
                 # print('MACD: green day')
                 green_indicators += 1
 
-            # rsi analysis: rsi higher then 50, uptrend
+            # rsi analysis: rsi higher then 50 (60 because of yahoo), uptrend
             rsi_anal = [False, False]
-            if dataframe.iloc[[i]]['RSI'].item() >= 50: rsi_anal[0] = True
+            if dataframe.iloc[[i]]['RSI'].item() >= MIN_RSI: rsi_anal[0] = True
             if dataframe.iloc[[i]]['RSI'].item() - dataframe.iloc[[i-1]]['RSI'].item() > 0 : rsi_anal[1] = True
 
             if (rsi_anal[0] & rsi_anal[1]):
@@ -195,7 +208,7 @@ def add_color_of_days(dataframe):
 
             # stochastic slow analysis: %K higher then 50, uptrend
             stochastic_slow_anal = [False, False]
-            if dataframe.iloc[[i]]['%K'].item() >= 50: stochastic_slow_anal[0] = True
+            if dataframe.iloc[[i]]['%K'].item() >= MIN_STOCH_K: stochastic_slow_anal[0] = True
             if dataframe.iloc[[i]]['%K'].item() - dataframe.iloc[[i-1]]['%K'].item() > 0 : stochastic_slow_anal[1] = True
 
             if (stochastic_slow_anal[0] & stochastic_slow_anal[1]):
@@ -214,7 +227,8 @@ def is_winner(dataframe):
     return (dataframe.iloc[[len(dataframe)-1]]['color'].item() == 'green' and
             dataframe.iloc[[len(dataframe)-2]]['color'].item() != 'green' and
             dataframe.iloc[[len(dataframe)-1]]['close'].item() < MAX_STOCKPRICE and
-            dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME)
+            dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME and
+            dataframe.iloc[[len(dataframe)-1]]['RSI'].item() < MAX_RSI)
 
 
 # todo: test if correct
@@ -331,7 +345,9 @@ def main():
     choice = input('Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in buy zone or {ticker symbol}: get specific info of a given symbol?: ')
     if choice == '1':
         set_winners()
-        print('Stocks in buy zone:\n' + ', '.join(winning_stocks) + '\nCheck out if the analysis is correct at: https://finance.yahoo.com')
+        print('Stocks in buy zone:\n' + ', '.join(winning_stocks) + '\nCheck out the stocks here:')
+        for winner in winning_stocks:
+            print('https://finance.yahoo.com/chart/' + winner)
     else:
         get_info(choice)
 
