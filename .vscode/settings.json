@@ -1,0 +1,17 @@
+{
+    "python.languageServer": "Pylance",
+    "python.linting.pylintEnabled": false,
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.autopep8"
+    },
+    "python.formatting.provider": "none",
+    "python.linting.pylintArgs": [
+        "--disable=invalid-name",
+        "--disable=broad-exception-caught",
+        "--disable=consider-using-f-string"
+    //    "--disable=missing-module-docstring",
+    //    "--disable=missing-class-docstring",
+    //    "--disable=missing-function-docstring"
+    ]
+      
+}
