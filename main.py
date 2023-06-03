@@ -18,9 +18,9 @@ DEPOSIT_VALUE=10000
 # RSI > 80 may indicate overbought -> use 85 because of difference to yahoos charts
 MAX_RSI = 85
 # RSI > 50 -> use 60 because of difference to yahoos charts
-MIN_RSI = 60
+MIN_RSI = 50
 # %K of stochastic slow should be over 50 -> use 60 because of difference to yahoos charts
-MIN_STOCH_K = 60
+MIN_STOCH_K = 50
 # url of API
 BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/'
 
@@ -178,47 +178,22 @@ def get_dates(format='%m/%d/%Y'):
 
 def add_color_of_days(dataframe):
     # first day has no color
-    colors = [None]
+    colors = []
     for i in range(len(dataframe)):
         # print(dataframe.iloc[[i]])
-        if(i > 0):
-            green_indicators = 0
+        green_indicators = 0
 
-            # macd analysis: macd higher then signal, uptrend
-            macd_anal = [False, False]
-            # macd of current day
-            current_diff_macd = dataframe.iloc[[i]]['MACD Line'].item() - dataframe.iloc[[i]]['Signal Line'].item()
-            if current_diff_macd > 0: macd_anal[0] = True
+        # macd
+        if (dataframe.iloc[[i]]['MACD Line'].item() - dataframe.iloc[[i]]['Signal Line'].item()): green_indicators +=1
+        # rsi
+        if (dataframe.iloc[[i]]['RSI'].item() >= MIN_RSI): green_indicators +=1
+        # stochastic slow
+        if (dataframe.iloc[[i]]['%K'].item() >= MIN_STOCH_K): green_indicators +=1
 
-            diff_to_prev_day_macd = dataframe.iloc[[i]]['MACD Line'].item() - dataframe.iloc[[i-1]]['MACD Line'].item()
-            if diff_to_prev_day_macd > 0: macd_anal[1] = True
 
-            if (macd_anal[0] & macd_anal[1]):
-                # print('MACD: green day')
-                green_indicators += 1
-
-            # rsi analysis: rsi higher then 50 (60 because of yahoo), uptrend
-            rsi_anal = [False, False]
-            if dataframe.iloc[[i]]['RSI'].item() >= MIN_RSI: rsi_anal[0] = True
-            if dataframe.iloc[[i]]['RSI'].item() - dataframe.iloc[[i-1]]['RSI'].item() > 0 : rsi_anal[1] = True
-
-            if (rsi_anal[0] & rsi_anal[1]):
-                # print('RSI: green day')
-                green_indicators += 1
-
-            # stochastic slow analysis: %K higher then 50, uptrend
-            stochastic_slow_anal = [False, False]
-            if dataframe.iloc[[i]]['%K'].item() >= MIN_STOCH_K: stochastic_slow_anal[0] = True
-            if dataframe.iloc[[i]]['%K'].item() - dataframe.iloc[[i-1]]['%K'].item() > 0 : stochastic_slow_anal[1] = True
-
-            if (stochastic_slow_anal[0] & stochastic_slow_anal[1]):
-                # print('Stochastic Slow: green day')
-                green_indicators += 1
-
-            
-            if (green_indicators == 3): colors.append('green')
-            elif (green_indicators < 3 and green_indicators > 0): colors.append('black')
-            else: colors.append('red')
+        if (green_indicators == 3): colors.append('green')
+        elif (green_indicators < 3 and green_indicators > 0): colors.append('black')
+        else: colors.append('red')
     
     dataframe['color'] = colors
 
@@ -252,8 +227,8 @@ def add_order_values(dataframe):
             # entry for next day
             next_entry = dataframe.iloc[[i]]['high'].item() + 0.01
             # stop_loss and limit order
-            stop_loss_current_day = next_entry - 1.5 * current_adr
-            limit_order_current_day = next_entry + 3 * current_adr
+            stop_loss_current_day = next_entry - current_adr
+            limit_order_current_day = next_entry + 2 * current_adr
             # max amount of shares to buy to not loose more than 2% of depot in case stop-loss triggeres
             max_shares_current_day = (DEPOSIT_VALUE*0.02) / (next_entry - stop_loss_current_day)
             shares_to_buy.append(max_shares_current_day)
