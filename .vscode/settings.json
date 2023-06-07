@@ -8,10 +8,9 @@
     "python.linting.pylintArgs": [
         "--disable=invalid-name",
         "--disable=broad-exception-caught",
-        "--disable=consider-using-f-string"
-    //    "--disable=missing-module-docstring",
-    //    "--disable=missing-class-docstring",
-    //    "--disable=missing-function-docstring"
+        "--disable=consider-using-f-string",
+        "--disable=global-statement",
+        "--disable=pointless-string-statement"
     ]
       
 }
