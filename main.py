@@ -23,7 +23,7 @@ MAX_RSI = 85
 # RSI > 50 -> use 60 because of difference to yahoos charts
 MIN_RSI = 50
 # %K of stochastic slow should be over 50 -> use 60 because of difference to yahoos charts
-MIN_STOCH_K = 50
+MIN_STOCH_D = 50
 # url of API
 BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/'
 # header for request to not get forbidden error
@@ -37,12 +37,30 @@ past_date = None
 params = None
 winning_stocks = []
 
+def set_dates(time_format='%m/%d/%Y'):
+    '''returns dates in est time zone.
+
+    Keyword arguments:
+    time_format -- wanted format of time
+    '''
+    global current_date, past_date
+    curr_date = datetime.now()
+    est_timezone = pytz.timezone('US/Eastern')
+    # convert to est
+    current_date_est = curr_date.astimezone(est_timezone)
+
+    formated_date = current_date_est.strftime(time_format)
+    past_month_date = current_date_est - timedelta(days=30)
+    formated_past_month_date = past_month_date.strftime(time_format)
+
+
+    current_date = formated_date
+    past_date = formated_past_month_date
+
 def init_request_params():
     '''inits global params used for sending a request.
     '''
-    global current_date, past_date, params
-    current_date, past_date = get_dates()
-
+    global params
     params = {
         'period1': int(pd.Timestamp(past_date).timestamp()),
         'period2': int(pd.Timestamp(current_date).timestamp()),
@@ -172,9 +190,7 @@ def get_option_strike_price(ticker, target_price):
             if strike_price < target_price:
                 return strike_price
 
-    else:
-        print('Error occurred:', response.status_code)
-        return None
+    return None
 
 
 # MACD
@@ -223,7 +239,7 @@ def add_rsi_data(dataframe):
     dataframe['RSI'] = rsi
 
 
-# todo: not always the most accurate result for %K
+# todo: not always the most accurate result for %D
 # stochastic slow
 def add_stochastic_slow(dataframe):
     '''adds stochastic slow(14, 3, 3) values.
@@ -247,23 +263,6 @@ def add_stochastic_slow(dataframe):
     dataframe['%D'] = percent_d
 
 
-def get_dates(time_format='%m/%d/%Y'):
-    '''returns dates in est time zone.
-
-    Keyword arguments:
-    time_format -- wanted format of time
-    '''
-    est_timezone = pytz.timezone('US/Eastern')
-
-    # convert to est
-    current_date_est = current_date.astimezone(est_timezone)
-
-    formated_date = current_date_est.strftime(time_format)
-    past_month_date = current_date_est - timedelta(days=30)
-    formated_past_month_date = past_month_date.strftime(time_format)
-    return formated_date, formated_past_month_date
-
-
 def add_color_of_days(dataframe):
     '''colors day to green, black or red.
 
@@ -277,13 +276,13 @@ def add_color_of_days(dataframe):
         green_indicators = 0
 
         # macd
-        if dataframe.iloc[[i]]['MACD Line'].item() - dataframe.iloc[[i]]['Signal Line'].item():
+        if dataframe.iloc[[i]]['MACD Line'].item() - dataframe.iloc[[i]]['Signal Line'].item() > 0:
             green_indicators += 1
         # rsi
         if dataframe.iloc[[i]]['RSI'].item() >= MIN_RSI:
             green_indicators += 1
         # stochastic slow
-        if dataframe.iloc[[i]]['%K'].item() >= MIN_STOCH_K:
+        if dataframe.iloc[[i]]['%D'].item() >= MIN_STOCH_D:
             green_indicators += 1
 
         if green_indicators == 3:
@@ -430,6 +429,7 @@ def test_data(ticker):
     """
     ticker_data = get_ticker_data(ticker)
 
+    # rsi
     rsi = ta.rsi(ticker_data['close'], length=7)
     ticker_data['rsi_new'] = rsi
 
@@ -451,6 +451,8 @@ def test_data(ticker):
 
     ticker_data['rsi_old'] = rsi1
 
+
+    # stoch slow
     ticker_data['%K_new'] = ta.sma(rsi, length=3)
 
     lowest_low = ticker_data['low'].rolling(window=14).min()
@@ -462,8 +464,25 @@ def test_data(ticker):
     ticker_data['%K_old'] = percent_k
     ticker_data['%D_old'] = percent_d
 
+    # macd
+    ema_12 = ticker_data['close'].ewm(span=12, adjust=False).mean()
+    ema_26 = ticker_data['close'].ewm(span=26, adjust=False).mean()
+
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    ticker_data['macd_diff_old'] = macd_line -signal_line
+
+
+    # add color
+    ticker_data['RSI'] = rsi1
+    ticker_data['MACD Line'] = macd_line
+    ticker_data['Signal Line'] = signal_line
+    ticker_data['%D'] = percent_d
+    add_color_of_days(ticker_data)
+
     ticker_data = ticker_data[[
-        'ticker', 'high', 'close', 'rsi_new', 'rsi_old', '%K_new', '%K_old']]
+        'ticker', 'high', 'close', 'rsi_new', 'rsi_old',
+        '%K_new', '%K_old', '%D_old', 'macd_diff_old', 'color']]
 
     print(ticker_data)
 
@@ -510,6 +529,7 @@ def get_info(ticker, options=False):
 def main():
     '''starts program based on user input.
     '''
+    set_dates()
     init_request_params()
     choice = input(
         'Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in ' +
