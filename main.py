@@ -537,6 +537,7 @@ def main():
     if choice == '1':
         set_winners()
         print('Stocks in buy zone:\n' + ', '.join(winning_stocks) +
+              '\nBut watch out -> do not buy stocks with gaps in the chart!' +
               '\nCheck out the stocks here:')
         for winner in winning_stocks:
             print('https://finance.yahoo.com/chart/' + winner)
