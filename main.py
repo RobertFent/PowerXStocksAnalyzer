@@ -5,6 +5,7 @@ import ftplib
 import threading
 import io
 from datetime import datetime, timedelta
+import math
 import pytz
 import requests
 import pandas_ta as ta
@@ -15,7 +16,7 @@ import pandas as pd
 # only stocks below 80 bucks
 MAX_STOCKPRICE = 80
 # only stocks with at least this daily volume
-MIN_VOLUME = 20000000
+MIN_VOLUME = 10000000
 # value of my deposit
 DEPOSIT_VALUE = 10000
 # RSI > 80 may indicate overbought -> use 85 because of difference to yahoos charts
@@ -36,6 +37,8 @@ current_date = None
 past_date = None
 params = None
 winning_stocks = []
+losing_stocks = []
+
 
 def set_dates(time_format='%m/%d/%Y'):
     '''returns dates in est time zone.
@@ -50,9 +53,8 @@ def set_dates(time_format='%m/%d/%Y'):
     current_date_est = curr_date.astimezone(est_timezone)
 
     formated_date = current_date_est.strftime(time_format)
-    past_month_date = current_date_est - timedelta(days=30)
+    past_month_date = current_date_est - timedelta(days=50)
     formated_past_month_date = past_month_date.strftime(time_format)
-
 
     current_date = formated_date
     past_date = formated_past_month_date
@@ -253,14 +255,15 @@ def add_stochastic_slow(dataframe):
     # Calculate the highest high over the past 14 days
     highest_high = dataframe['high'].rolling(window=14).max()
 
-    # Calculate %K
+    # Calculate %K (fast stochastic)
     percent_k = ((dataframe['close'] - lowest_low) /
                  (highest_high - lowest_low)) * 100
-    # Calculate %D (3-day simple moving average of %K)
-    percent_d = percent_k.rolling(window=3, min_periods=0).mean()
+    # Calculate %D  (3-day simple moving average of %K) (fast stochastic)
+    percent_d = percent_k.rolling(window=3).mean()
 
-    dataframe['%K'] = percent_k
-    dataframe['%D'] = percent_d
+    # slow stochastic
+    dataframe['%K'] = percent_d
+    dataframe['%D'] = dataframe['%K'].rolling(window=3).mean()
 
 
 def add_color_of_days(dataframe):
@@ -285,6 +288,10 @@ def add_color_of_days(dataframe):
         if dataframe.iloc[[i]]['%D'].item() >= MIN_STOCH_D:
             green_indicators += 1
 
+        if math.isnan(dataframe.iloc[[i]]['%D'].item()):
+            colors.append('NaN')
+            continue
+
         if green_indicators == 3:
             colors.append('green')
         elif (green_indicators < 3 and green_indicators > 0):
@@ -307,6 +314,19 @@ def is_winner(dataframe):
             dataframe.iloc[[len(dataframe)-1]]['close'].item() < MAX_STOCKPRICE and
             dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME and
             dataframe.iloc[[len(dataframe)-1]]['RSI'].item() < MAX_RSI)
+
+
+def is_loser(dataframe):
+    '''decide if stock is a loser.
+
+    Keyword arguments:
+    dataframe -- ticker data as pd dataframe
+    '''
+    # current day should be red and the day before not
+    return (dataframe.iloc[[len(dataframe)-1]]['color'].item() == 'red' and
+            dataframe.iloc[[len(dataframe)-2]]['color'].item() != 'red' and
+            dataframe.iloc[[len(dataframe)-1]]['close'].item() < MAX_STOCKPRICE and
+            dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME)
 
 
 def add_order_values(dataframe):
@@ -384,32 +404,36 @@ def analyze_ticker(ticker):
 
 
 def analyze_ticker_wrapper(ticker):
-    '''analyze stock and return if winner.
+    '''Analyze stock and determine if it's a winner or loser.
 
     Keyword arguments:
-    tickers -- list of all symbols
+    ticker -- stock ticker symbol
     '''
     ticker_data = analyze_ticker(ticker)
-    if ticker_data is not None and is_winner(ticker_data):
-        return ticker_data.iloc[[len(ticker_data)-1]]['ticker'].item()
+    if ticker_data is not None:
+        if is_winner(ticker_data):
+            with LOCK:
+                winning_stocks.append(ticker)
+        elif is_loser(ticker_data):
+            with LOCK:
+                losing_stocks.append(ticker)
 
 
 def analyze_stocks(tickers):
-    '''analyze all stocks in concurrent threads.
+    '''Analyze all stocks in concurrent threads with progress bar.
 
     Keyword arguments:
     tickers -- list of all symbols
     '''
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        results = list(
-            tqdm(executor.map(analyze_ticker_wrapper, tickers), total=len(tickers)))
-        with LOCK:
-            winning_stocks.extend(
-                [ticker for ticker in results if ticker is not None])
+        futures = [executor.submit(analyze_ticker_wrapper, ticker)
+                   for ticker in tickers]
+        for _ in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+            pass
 
 
-def set_winners():
-    '''set all winners of each index.
+def calc_attribs():
+    '''set all winners and loosers of each index.
     '''
     print('Analyzing NASDAQ...')
     tickers = get_nasdaq_symbols()
@@ -423,71 +447,7 @@ def set_winners():
     analyze_stocks(tickers)
     print('%d stocks in S&P500 analyzed' % len(tickers))
 
-
-def test_data(ticker):
-    """method for testing various params or calcs.
-    """
-    ticker_data = get_ticker_data(ticker)
-
-    # rsi
-    rsi = ta.rsi(ticker_data['close'], length=7)
-    ticker_data['rsi_new'] = rsi
-
-    price_changes = ticker_data['close'].diff()
-
-    # Separate gains and losses
-    gains = price_changes.where(price_changes > 0, 0)
-    losses = -price_changes.where(price_changes < 0, 0)
-
-    # Calculate average gain and average loss over 7-day period
-    avg_gain = gains.rolling(window=7, min_periods=1).mean()
-    avg_loss = losses.rolling(window=7, min_periods=1).mean()
-
-    # Calculate relative strength (RS)
-    rs = avg_gain / avg_loss
-
-    # Calculate RSI
-    rsi1 = 100 - (100 / (1 + rs))
-
-    ticker_data['rsi_old'] = rsi1
-
-
-    # stoch slow
-    ticker_data['%K_new'] = ta.sma(rsi, length=3)
-
-    lowest_low = ticker_data['low'].rolling(window=14).min()
-    highest_high = ticker_data['high'].rolling(window=14).max()
-    percent_k = ((ticker_data['close'] - lowest_low) /
-                 (highest_high - lowest_low)) * 100
-    percent_d = percent_k.rolling(window=3, min_periods=0).mean()
-
-    ticker_data['%K_old'] = percent_k
-    ticker_data['%D_old'] = percent_d
-
-    # macd
-    ema_12 = ticker_data['close'].ewm(span=12, adjust=False).mean()
-    ema_26 = ticker_data['close'].ewm(span=26, adjust=False).mean()
-
-    macd_line = ema_12 - ema_26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    ticker_data['macd_diff_old'] = macd_line -signal_line
-
-
-    # add color
-    ticker_data['RSI'] = rsi1
-    ticker_data['MACD Line'] = macd_line
-    ticker_data['Signal Line'] = signal_line
-    ticker_data['%D'] = percent_d
-    add_color_of_days(ticker_data)
-
-    ticker_data = ticker_data[[
-        'ticker', 'high', 'close', 'rsi_new', 'rsi_old',
-        '%K_new', '%K_old', '%D_old', 'macd_diff_old', 'color']]
-
-    print(ticker_data)
-
-
-def get_info(ticker, options=False):
+def get_info(ticker, options=False, debug=False):
     '''prints the ticker data.
 
     Keyword arguments:
@@ -499,7 +459,7 @@ def get_info(ticker, options=False):
 
         add_order_values(ticker_data)
 
-        # debug
+        # for debugging
         # add needed values
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
@@ -513,11 +473,15 @@ def get_info(ticker, options=False):
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Strike-Price', 'color']]
             print('Details for OPTIONS-Trading:')
-        else:
+        elif not options and not debug:
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
-                'Limit-Order', 'Max-Shares', 'color']]
+                'Limit-Order', 'Max-Shares', 'color', 'volume']]
             print('Details for Stock-Trading:')
+        else:
+            ticker_data = ticker_data[[
+                'ticker', 'high', 'close', 'open', 'low','MACD Line', 'Signal Line', '%K', '%D', 'RSI', 'volume', 'color']]
+            print('Details for debugging:')
 
         print(ticker_data)
         print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %
@@ -533,14 +497,22 @@ def main():
     init_request_params()
     choice = input(
         'Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in ' +
-        'buy zone or {ticker symbol}: get specific info of a given symbol?: ')
+        'buy zone | short position or {ticker symbol}: get specific info of a given symbol?: ')
     if choice == '1':
-        set_winners()
-        print('Stocks in buy zone:\n' + ', '.join(winning_stocks) +
-              '\nBut watch out -> do not buy stocks with gaps in the chart!' +
-              '\nCheck out the stocks here:')
-        for winner in winning_stocks:
-            print('https://finance.yahoo.com/chart/' + winner)
+        calc_attribs()
+        # winner
+        print('Stocks in buy zone:\n' + ', '.join(winning_stocks))
+        if len(winning_stocks) > 0:
+            print('\nBut watch out -> do not trade stocks with gaps in the chart!' +
+                  '\nCheck out the stocks here:')
+            for winner in winning_stocks:
+                print('https://finance.yahoo.com/chart/' + winner)
+        # loser
+        print('Stocks in short position:\n' + ', '.join(losing_stocks))
+        if len(losing_stocks) > 0:
+            print('\nCheck out the stocks here:')
+            for loser in losing_stocks:
+                print('https://finance.yahoo.com/chart/' + loser)
     else:
         choice1 = input(
             'Do you trade stocks or options? 1=stocks; 2=options; 3=debugging: ')
@@ -549,7 +521,7 @@ def main():
         elif choice1 == '2':
             get_info(choice, True)
         elif choice1 == '3':
-            test_data(choice)
+            get_info(choice, False, True)
         else:
             print('Wrong input!')
 
