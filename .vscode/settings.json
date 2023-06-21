@@ -10,7 +10,8 @@
         "--disable=broad-exception-caught",
         "--disable=consider-using-f-string",
         "--disable=global-statement",
-        "--disable=pointless-string-statement"
+        "--disable=pointless-string-statement",
+        "--disable=expression-not-assigned"
     ]
       
 }
