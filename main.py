@@ -130,7 +130,7 @@ def get_ticker_data_tradier(symbol):
     """
 
     # Set the endpoint URL and parameters
-    url = 'https://api.tradier.com/v1/markets/quotes'
+    url = 'https://api.tradier.com/v1/markets/history'
 
     # Make the API request
     headers = {
@@ -141,47 +141,40 @@ def get_ticker_data_tradier(symbol):
     }
 
     params = {
-        'symbols': symbol,
+        'symbol': symbol,
         'start': past_date,
         'end': current_date
     }
 
-    #print(headers)
-    #print(params)
-
     response = requests.get(url, headers=headers, params=params, timeout=5)
-
-    #print(response.status_code)
 
     # Process the response
     if response.status_code == 200:
         data = json.loads(response.text)
-        print(data)
+
         quotes = data['history']['day']
-        #print(quotes)
 
         # Create a pandas DataFrame to store the data
-        df = pd.DataFrame(quotes)
-        #print(df)
-        df['date'] = pd.to_datetime(df['date'])
+        frame = pd.DataFrame(quotes)
+        frame.index = pd.to_datetime(frame['date'])
 
         # Extract required columns
-        df = df[['date', 'high', 'close', 'open', 'low']]
+        frame = frame[['open', 'high', 'low', 'close', 'volume']]
+        frame['ticker'] = symbol.upper()
 
-        #print(df)
-        return df
+        return frame
     else:
         #print("Error occurred while fetching stock data.")
         return None
 
 
-def get_ticker_data_yahoo(ticker):
+def get_ticker_data_yahoo(symbol):
     '''returns dataframe with all needed data of given symbol.
 
     Keyword arguments:
     ticker -- symbol of stock
     '''
-    url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + ticker
+    url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + symbol
 
     # header for request to not get forbidden error
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
@@ -213,7 +206,7 @@ def get_ticker_data_yahoo(ticker):
 
         # reorder frame
         frame = frame[['open', 'high', 'low', 'close', 'volume']]
-        frame['ticker'] = ticker.upper()
+        frame['ticker'] = symbol.upper()
 
         return frame
 
