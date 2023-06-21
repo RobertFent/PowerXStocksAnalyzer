@@ -462,11 +462,7 @@ def analyze_ticker(ticker):
     tickers -- list of all symbols
     '''
     try:
-        if TRADIER == 'True':
-            # get data starting past month and ending current date
-            ticker_data = get_ticker_data_tradier(ticker)
-        else:
-            ticker_data = get_ticker_data_yahoo(ticker)
+        ticker_data = get_ticker_data_tradier(ticker) if TRADIER == 'True' else get_ticker_data_yahoo(ticker)
         # add needed values
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
@@ -536,10 +532,7 @@ def get_info(ticker, options=False, debug=False):
     options -- wether ticker data should be for stocks or option trading
     '''
     try:
-        if TRADIER == 'True':
-            ticker_data = get_ticker_data_tradier(ticker)
-        else:
-            ticker_data = get_ticker_data_yahoo(ticker)
+        ticker_data = get_ticker_data_tradier(ticker) if TRADIER == 'True' else get_ticker_data_yahoo(ticker)
 
         add_order_values(ticker_data)
 
