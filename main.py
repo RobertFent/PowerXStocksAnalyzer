@@ -1,11 +1,18 @@
 '''stock analyzer based on PowerXStrategy
+
+may use tradier or yahoo finance data (based on vars in .env)
+
+example usage:
+python3 ./main.py
 '''
 import concurrent.futures
 import ftplib
 import threading
 import io
+import json
 from datetime import datetime, timedelta
 import math
+from dotenv import dotenv_values
 import pytz
 import requests
 import pandas_ta as ta
@@ -25,17 +32,14 @@ MAX_RSI = 85
 MIN_RSI = 50
 # %K of stochastic slow should be over 50 -> use 60 because of difference to yahoos charts
 MIN_STOCH_D = 50
-# url of API
-BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart/'
-# header for request to not get forbidden error
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
-           ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
+# how long the dataframe should be
+DAYS=120
+
 LOCK = threading.Lock()
 
 # global dynamic params
 current_date = None
 past_date = None
-params = None
 winning_stocks = []
 losing_stocks = []
 
@@ -53,22 +57,11 @@ def set_dates(time_format='%m/%d/%Y'):
     current_date_est = curr_date.astimezone(est_timezone)
 
     formated_date = current_date_est.strftime(time_format)
-    past_month_date = current_date_est - timedelta(days=50)
+    past_month_date = current_date_est - timedelta(days=DAYS)
     formated_past_month_date = past_month_date.strftime(time_format)
 
     current_date = formated_date
     past_date = formated_past_month_date
-
-def init_request_params():
-    '''inits global params used for sending a request.
-    '''
-    global params
-    params = {
-        'period1': int(pd.Timestamp(past_date).timestamp()),
-        'period2': int(pd.Timestamp(current_date).timestamp()),
-        'interval': '1d',
-        # 'events': 'div,splits'
-    }
 
 
 def get_sp500_symbols():
@@ -132,16 +125,76 @@ def get_dow_jones_symbols():
 # print(dow_jones_symbols)
 
 
-def get_ticker_data(ticker):
+def get_ticker_data_tradier(symbol):
+    """ todo
+    """
+
+    # Set the endpoint URL and parameters
+    url = 'https://api.tradier.com/v1/markets/quotes'
+
+    # Make the API request
+    headers = {
+        'Authorization': f'Bearer {API_KEY}',
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
+        ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+    }
+
+    params = {
+        'symbols': symbol,
+        'start': past_date,
+        'end': current_date
+    }
+
+    #print(headers)
+    #print(params)
+
+    response = requests.get(url, headers=headers, params=params, timeout=5)
+
+    #print(response.status_code)
+
+    # Process the response
+    if response.status_code == 200:
+        data = json.loads(response.text)
+        print(data)
+        quotes = data['history']['day']
+        #print(quotes)
+
+        # Create a pandas DataFrame to store the data
+        df = pd.DataFrame(quotes)
+        #print(df)
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Extract required columns
+        df = df[['date', 'high', 'close', 'open', 'low']]
+
+        #print(df)
+        return df
+    else:
+        #print("Error occurred while fetching stock data.")
+        return None
+
+
+def get_ticker_data_yahoo(ticker):
     '''returns dataframe with all needed data of given symbol.
 
     Keyword arguments:
     ticker -- symbol of stock
     '''
-    url = BASE_URL + ticker
+    url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + ticker
+
+    # header for request to not get forbidden error
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
+               ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
+
+    params = {
+        'period1': int(pd.Timestamp(past_date).timestamp()),
+        'period2': int(pd.Timestamp(current_date).timestamp()),
+        'interval': '1d',
+    }
 
     # send request
-    response = requests.get(url, params, headers=HEADERS, timeout=5)
+    response = requests.get(url, params, headers=headers, timeout=5)
 
     if response.status_code == 200:
         # get JSON response
@@ -167,35 +220,53 @@ def get_ticker_data(ticker):
     return None
 
 
-def get_option_strike_price(ticker, target_price):
+def get_option_strike_price_tradier(ticker, target_price):
+    """ todo
+    """
+    return None
+
+
+def get_option_strike_price_yahoo(ticker, target_price):
     '''todo: exp. etc.
     '''
     url = 'https://query2.finance.yahoo.com/v7/finance/options/' + ticker
-    response = requests.get(url, params, headers=HEADERS, timeout=5)
+
+    # header for request to not get forbidden error
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
+               ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
+
+    params = {
+        'period1': int(pd.Timestamp(past_date).timestamp()),
+        'period2': int(pd.Timestamp(current_date).timestamp()),
+        'interval': '1d',
+    }
+    response = requests.get(url, params, headers=headers, timeout=5)
+
     if response.status_code == 200:
         data = response.json()
-        options = data['optionChain']['result'][0]['options'][0]['calls']
-        # iterate over inverted list to start with max call and break at first call lower
-        for option in options[::-1]:
-            strike_price = option['strike']
-            """
-            expiration_date = option['expiration']
-            # contract should expire within 30-45 days
-            future1 = (datetime.now() + timedelta(days=10)).timestamp()
-            future2 = (datetime.now() + timedelta(days=45)).timestamp()
-            if (strike_price < target_price and
-                expiration_date > future1 and
-                    expiration_date < future2):
-                print(option)
-                return option['strike'], option['contractSymbol']
-            """
-            if strike_price < target_price:
-                return strike_price
+        options = data['optionChain']['result'][0]['options']
+        if options:
+            calls = data['optionChain']['result'][0]['options'][0]['calls']
+            # iterate over inverted list to start with max call and break at first call lower
+            for call in calls[::-1]:
+                strike_price = call['strike']
+                """
+                expiration_date = option['expiration']
+                # contract should expire within 30-45 days
+                future1 = (datetime.now() + timedelta(days=10)).timestamp()
+                future2 = (datetime.now() + timedelta(days=45)).timestamp()
+                if (strike_price < target_price and
+                    expiration_date > future1 and
+                        expiration_date < future2):
+                    print(option)
+                    return option['strike'], option['contractSymbol']
+                """
+                if strike_price < target_price:
+                    return strike_price
 
     return None
 
 
-# MACD
 def add_macd_data(dataframe):
     '''adds macd(26, 12, 9) values.
 
@@ -211,7 +282,7 @@ def add_macd_data(dataframe):
     dataframe['MACD Line'] = macd_line
     dataframe['Signal Line'] = signal_line
 
-# RSI
+
 def add_rsi_data(dataframe):
     '''adds rsi(7) values.
 
@@ -241,10 +312,12 @@ def add_rsi_data(dataframe):
     dataframe['RSI'] = rsi
 
 
-# todo: not always the most accurate result for %D
-# stochastic slow
 def add_stochastic_slow(dataframe):
     '''adds stochastic slow(14, 3, 3) values.
+
+    # todo?: maybe use this info
+    if %K crosses above %D -> buy signal
+    if %K crosses below %D -> sell signal
 
     Keyword arguments:
     dataframe -- ticker data as pd dataframe
@@ -369,8 +442,10 @@ def add_order_values(dataframe):
             stop_loss.append(stop_loss_current_day)
             limit_order.append(limit_order_current_day)
 
-    strike_price.append(get_option_strike_price(
-        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), entry[len(entry)-1]))
+    strike_price.append(get_option_strike_price_tradier(
+        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), entry[len(entry)-1])
+        if TRADIER == 'True' else get_option_strike_price_tradier(
+        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(),entry[len(entry)-1]))
 
     # dataframe['ADR'] = adr
     dataframe['Next-Entry'] = entry
@@ -387,8 +462,11 @@ def analyze_ticker(ticker):
     tickers -- list of all symbols
     '''
     try:
-        # get data starting past month and ending current date
-        ticker_data = get_ticker_data(ticker)
+        if TRADIER == 'True':
+            # get data starting past month and ending current date
+            ticker_data = get_ticker_data_tradier(ticker)
+        else:
+            ticker_data = get_ticker_data_yahoo(ticker)
         # add needed values
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
@@ -399,7 +477,9 @@ def analyze_ticker(ticker):
 
         return ticker_data
 
-    except Exception:
+    except Exception as e:
+        # todo: prints error when stock symbol does not return anything -> handle before
+        #print(str(e))
         pass
 
 
@@ -432,7 +512,7 @@ def analyze_stocks(tickers):
             pass
 
 
-def calc_attribs():
+def process_algorithm():
     '''set all winners and loosers of each index.
     '''
     print('Analyzing NASDAQ...')
@@ -447,6 +527,7 @@ def calc_attribs():
     analyze_stocks(tickers)
     print('%d stocks in S&P500 analyzed' % len(tickers))
 
+
 def get_info(ticker, options=False, debug=False):
     '''prints the ticker data.
 
@@ -455,7 +536,10 @@ def get_info(ticker, options=False, debug=False):
     options -- wether ticker data should be for stocks or option trading
     '''
     try:
-        ticker_data = get_ticker_data(ticker)
+        if TRADIER == 'True':
+            ticker_data = get_ticker_data_tradier(ticker)
+        else:
+            ticker_data = get_ticker_data_yahoo(ticker)
 
         add_order_values(ticker_data)
 
@@ -480,7 +564,8 @@ def get_info(ticker, options=False, debug=False):
             print('Details for Stock-Trading:')
         else:
             ticker_data = ticker_data[[
-                'ticker', 'high', 'close', 'open', 'low','MACD Line', 'Signal Line', '%K', '%D', 'RSI', 'volume', 'color']]
+                'ticker', 'high', 'close', 'open', 'low', 'MACD Line',
+                'Signal Line', '%K', '%D', 'RSI', 'volume', 'color']]
             print('Details for debugging:')
 
         print(ticker_data)
@@ -493,26 +578,27 @@ def get_info(ticker, options=False, debug=False):
 def main():
     '''starts program based on user input.
     '''
-    set_dates()
-    init_request_params()
+    # set dates properly for yahoo or tradier
+    set_dates('%Y-%m-%d') if TRADIER == 'True' else set_dates()
     choice = input(
         'Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in ' +
         'buy zone | short position or {ticker symbol}: get specific info of a given symbol?: ')
     if choice == '1':
-        calc_attribs()
+        process_algorithm()
         # winner
         print('Stocks in buy zone:\n' + ', '.join(winning_stocks))
         if len(winning_stocks) > 0:
-            print('\nBut watch out -> do not trade stocks with gaps in the chart!' +
-                  '\nCheck out the stocks here:')
+            print('\nCheck out the stocks here:')
             for winner in winning_stocks:
                 print('https://finance.yahoo.com/chart/' + winner)
         # loser
-        print('Stocks in short position:\n' + ', '.join(losing_stocks))
+        print('\nStocks in short position:\n' + ', '.join(losing_stocks))
         if len(losing_stocks) > 0:
             print('\nCheck out the stocks here:')
             for loser in losing_stocks:
                 print('https://finance.yahoo.com/chart/' + loser)
+
+        print('\nBut watch out -> do not trade stocks with gaps in the chart!')
     else:
         choice1 = input(
             'Do you trade stocks or options? 1=stocks; 2=options; 3=debugging: ')
@@ -526,4 +612,11 @@ def main():
             print('Wrong input!')
 
 
-main()
+if __name__ == '__main__':
+
+    # read vars from .env file
+    env_vars = dotenv_values('.env')
+    TRADIER = env_vars['TRADIER']
+    API_KEY = env_vars['API_KEY']
+
+    main()
