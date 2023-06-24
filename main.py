@@ -6,12 +6,14 @@ example usage:
 python3 ./main.py
 '''
 import concurrent.futures
+import csv
 import ftplib
 import threading
 import io
 import json
 from datetime import datetime, timedelta
 import math
+from pathlib import Path
 from dotenv import dotenv_values
 import pytz
 import requests
@@ -56,12 +58,29 @@ def set_dates(time_format='%m/%d/%Y'):
     # convert to est
     current_date_est = curr_date.astimezone(est_timezone)
 
-    formated_date = current_date_est.strftime(time_format)
-    past_month_date = current_date_est - timedelta(days=DAYS)
-    formated_past_month_date = past_month_date.strftime(time_format)
+    # current date is prev. day if using Tradier
+    curr_days = 1 if TRADIER == 'True' else 0
+    current_date = (current_date_est  - timedelta(days=curr_days)).strftime(time_format)
+    past_date = (current_date_est - timedelta(days=DAYS)).strftime(time_format)
 
-    current_date = formated_date
-    past_date = formated_past_month_date
+
+def get_symbols_from_csv():
+    '''returns list of symbols from csv.
+    '''
+    symbols = []
+
+    pathlist = Path('csv/').rglob('*.csv')
+    for path in pathlist:
+        path_in_str = str(path)
+
+        with open(path_in_str, 'r', encoding='UTF-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                symbol = row['Symbol']
+                symbols.append(symbol)
+
+    # use set to remove duplicates
+    return set(symbols)
 
 
 def get_sp500_symbols():
@@ -80,6 +99,7 @@ def get_sp500_symbols():
     return symbols
 
 
+# not working anymore as problem with ftp currently happens -> using fallback .csv
 def get_nasdaq_symbols():
     '''returns list of nasdaq listed symbols.
     '''
@@ -103,31 +123,12 @@ def get_nasdaq_symbols():
     return symbols
 
 
-def get_dow_jones_symbols():
-    '''returns list of dow jones listed symbols.
-    '''
-    url = 'https://www.investing.com/indices/us-30-components'
-    response = requests.get(url, timeout=5)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    table = soup.find('table', {'id': 'cr1'})
-
-    symbols = []
-
-    for row in table.findAll('tr'):
-        symbol = row.find(
-            'td', {'class': 'bold left noWrap elp name'}).text.strip()
-        symbols.append(symbol)
-
-    return symbols
-
-# todo
-# dow_jones_symbols = get_dow_jones_symbols()
-# print(dow_jones_symbols)
-
-
 def get_ticker_data_tradier(symbol):
-    """ todo
-    """
+    '''returns dataframe with all needed data of given symbol from tradier api.
+
+    Keyword arguments:
+    ticker -- symbol of stock
+    '''
 
     # Set the endpoint URL and parameters
     url = 'https://api.tradier.com/v1/markets/history'
@@ -169,11 +170,12 @@ def get_ticker_data_tradier(symbol):
 
 
 def get_ticker_data_yahoo(symbol):
-    '''returns dataframe with all needed data of given symbol.
+    '''returns dataframe with all needed data of given symbol from yahoo.finance api.
 
     Keyword arguments:
     ticker -- symbol of stock
     '''
+
     url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + symbol
 
     # header for request to not get forbidden error
@@ -213,12 +215,14 @@ def get_ticker_data_yahoo(symbol):
     return None
 
 
+# todo
 def get_option_strike_price_tradier(ticker, target_price):
-    """ todo
-    """
+    '''todo
+    '''
     return None
 
 
+# todo
 def get_option_strike_price_yahoo(ticker, target_price):
     '''todo: exp. etc.
     '''
@@ -455,7 +459,8 @@ def analyze_ticker(ticker):
     tickers -- list of all symbols
     '''
     try:
-        ticker_data = get_ticker_data_tradier(ticker) if TRADIER == 'True' else get_ticker_data_yahoo(ticker)
+        ticker_data = (get_ticker_data_tradier(ticker) if TRADIER == 'True'
+                       else get_ticker_data_yahoo(ticker))
         # add needed values
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
@@ -467,7 +472,6 @@ def analyze_ticker(ticker):
         return ticker_data
 
     except Exception as e:
-        # todo: prints error when stock symbol does not return anything -> handle before
         #print(str(e))
         pass
 
@@ -504,9 +508,9 @@ def analyze_stocks(tickers):
 def process_algorithm():
     '''set all winners and loosers of each index.
     '''
+    ''' way of getting symbols online
     print('Analyzing NASDAQ...')
     tickers = get_nasdaq_symbols()
-    # print(tickers)
     analyze_stocks(tickers)
     print('%d stocks in NASDAQ analyzed' % len(tickers))
 
@@ -515,6 +519,12 @@ def process_algorithm():
     # print(tickers)
     analyze_stocks(tickers)
     print('%d stocks in S&P500 analyzed' % len(tickers))
+    '''
+    print('Analyzing Nasdaq, NYSE, DJIA and S&P500...')
+    tickers = get_symbols_from_csv()
+    #print(tickers)
+    analyze_stocks(tickers)
+    print('%d stocks in  Nasdaq, NYSE, DJIA and S&P500 analyzed' % len(tickers))
 
 
 def get_info(ticker, options=False, debug=False):
@@ -525,7 +535,8 @@ def get_info(ticker, options=False, debug=False):
     options -- wether ticker data should be for stocks or option trading
     '''
     try:
-        ticker_data = get_ticker_data_tradier(ticker) if TRADIER == 'True' else get_ticker_data_yahoo(ticker)
+        ticker_data = (get_ticker_data_tradier(ticker) if TRADIER == 'True'
+                       else get_ticker_data_yahoo(ticker))
 
         add_order_values(ticker_data)
 
@@ -539,7 +550,6 @@ def get_info(ticker, options=False, debug=False):
         add_color_of_days(ticker_data)
 
         if options:
-            # todo: get data for options
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Strike-Price', 'color']]
             print('Details for OPTIONS-Trading:')
@@ -604,5 +614,7 @@ if __name__ == '__main__':
     env_vars = dotenv_values('.env')
     TRADIER = env_vars['TRADIER']
     API_KEY = env_vars['API_KEY']
+
+    #pd.set_option('display.max_rows', None)
 
     main()
