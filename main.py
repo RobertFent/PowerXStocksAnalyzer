@@ -4,7 +4,11 @@ may use tradier or yahoo finance data (based on vars in .env)
 
 example usage:
 python3 ./main.py
+
+of if run as cronjob:
+python3 main.py --cron 1
 '''
+import argparse
 import concurrent.futures
 import csv
 import ftplib
@@ -590,15 +594,16 @@ def save_output_to_file(text):
             print(text, file=f)
 
 
-def main():
+def main(cron):
     '''starts program based on user input.
     '''
     # set dates properly for yahoo or tradier
     set_dates('%Y-%m-%d') if TRADIER == 'True' else set_dates()
-    choice = input(
+    choice = (input(
         'Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in ' +
         'buy zone | short position or {ticker symbol}: get specific info of a given symbol?: ')
-    if choice == '1':
+        if cron != 1 else None)
+    if choice == '1' or cron == 1:
         process_algorithm()
         print('Processing done! Check output here: output/%s.txt' % current_date)
         # winner
@@ -639,4 +644,8 @@ if __name__ == '__main__':
     TRADIER = env_vars['TRADIER']
     API_KEY = env_vars['API_KEY']
 
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cron", type=int, default=0, help="0 if not cronjob 1 else")
+    args = parser.parse_args()
+
+    main(args.cron)
