@@ -147,7 +147,7 @@ def get_ticker_data_tradier(symbol):
         'end': current_date
     }
 
-    response = requests.get(url, headers=headers, params=params, timeout=5)
+    response = requests.get(url, headers=headers, params=params, timeout=1)
 
     # Process the response
     if response.status_code == 200:
@@ -483,6 +483,7 @@ def analyze_ticker_wrapper(ticker):
     ticker -- stock ticker symbol
     '''
     ticker_data = analyze_ticker(ticker)
+    #print(ticker_data)
     if ticker_data is not None:
         if is_winner(ticker_data):
             with LOCK:
@@ -571,6 +572,24 @@ def get_info(ticker, options=False, debug=False):
         print(str(e))
 
 
+def save_output_to_file(text):
+    '''saves text into file with current date as title
+    '''
+    filename = 'output/%s.txt' % current_date
+    path = Path(filename)
+
+    # file exists
+    if path.is_file():
+        with open(filename, 'a', encoding='UTF-8') as f:
+            print(text, file=f)
+
+    # create file if not existing
+    else:
+        with open(filename, 'w', encoding='UTF-8') as f:
+            print(filename, file=f)
+            print(text, file=f)
+
+
 def main():
     '''starts program based on user input.
     '''
@@ -581,28 +600,33 @@ def main():
         'buy zone | short position or {ticker symbol}: get specific info of a given symbol?: ')
     if choice == '1':
         process_algorithm()
+        print('Processing done! Check output here: output/%s.txt' % current_date)
         # winner
-        print('Stocks in buy zone:\n' + ', '.join(winning_stocks))
+        save_output_to_file('Stocks in buy zone:\n' + ', '.join(winning_stocks))
         if len(winning_stocks) > 0:
-            print('\nCheck out the stocks here:')
+            save_output_to_file('\nCheck out the stocks here:')
             for winner in winning_stocks:
-                print('https://finance.yahoo.com/chart/' + winner)
+                save_output_to_file('https://finance.yahoo.com/chart/' + winner)
         # loser
-        print('\nStocks in short position:\n' + ', '.join(losing_stocks))
+        save_output_to_file('\nStocks in short position:\n' + ', '.join(losing_stocks))
         if len(losing_stocks) > 0:
-            print('\nCheck out the stocks here:')
+            save_output_to_file('\nCheck out the stocks here:')
             for loser in losing_stocks:
-                print('https://finance.yahoo.com/chart/' + loser)
+                save_output_to_file('https://finance.yahoo.com/chart/' + loser)
 
-        print('\nBut watch out -> do not trade stocks with gaps in the chart!')
+        save_output_to_file('\nBut watch out -> do not trade stocks with gaps in the chart!')
     else:
         choice1 = input(
-            'Do you trade stocks or options? 1=stocks; 2=options; 3=debugging: ')
+            'Do you trade stocks or options? 1=stocks (short format);' +
+            '2=stocks (long format); 3=options; 4=debugging: ')
         if choice1 == '1':
             get_info(choice)
         elif choice1 == '2':
-            get_info(choice, True)
+            pd.set_option('display.max_rows', None)
+            get_info(choice)
         elif choice1 == '3':
+            get_info(choice, True)
+        elif choice1 == '4':
             get_info(choice, False, True)
         else:
             print('Wrong input!')
@@ -614,7 +638,5 @@ if __name__ == '__main__':
     env_vars = dotenv_values('.env')
     TRADIER = env_vars['TRADIER']
     API_KEY = env_vars['API_KEY']
-
-    #pd.set_option('display.max_rows', None)
 
     main()
