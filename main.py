@@ -25,6 +25,7 @@ import pandas_ta as ta
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 import pandas as pd
+import numpy as np
 
 # only stocks below 80 bucks
 MAX_STOCKPRICE = 80
@@ -40,6 +41,8 @@ MIN_RSI = 50
 MIN_STOCH_D = 50
 # how long the dataframe should be
 DAYS=120
+# max implied volatility value -> don't trade stocks that are too volatil
+MAX_IV = 50
 
 LOCK = threading.Lock()
 
@@ -340,6 +343,20 @@ def add_stochastic_slow(dataframe):
     dataframe['%D'] = dataframe['%K'].rolling(window=3).mean()
 
 
+def add_implied_volatility(dataframe):
+    '''adds implied volatility values.
+
+    Keyword arguments:
+    dataframe -- ticker data as pd dataframe
+    '''
+    dataframe['returns'] = dataframe['close'].pct_change()
+    std_dev = dataframe['returns'].std()
+    # trading_days_per_year = 252
+    annualized_std_dev = std_dev * np.sqrt(252)
+    dataframe['implied_volatilitiy'] = np.nan
+    dataframe.loc[dataframe.index[-1], 'implied_volatilitiy'] = annualized_std_dev * 100
+
+
 def add_color_of_days(dataframe):
     '''colors day to green, black or red.
 
@@ -387,7 +404,8 @@ def is_winner(dataframe):
             dataframe.iloc[[len(dataframe)-2]]['color'].item() != 'green' and
             dataframe.iloc[[len(dataframe)-1]]['close'].item() < MAX_STOCKPRICE and
             dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME and
-            dataframe.iloc[[len(dataframe)-1]]['RSI'].item() < MAX_RSI)
+            dataframe.iloc[[len(dataframe)-1]]['RSI'].item() < MAX_RSI and
+            dataframe.iloc[[len(dataframe)-1]]['implied_volatilitiy'].item() < MAX_IV)
 
 
 def is_loser(dataframe):
@@ -550,6 +568,7 @@ def get_info(ticker, options=False, debug=False):
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
         add_stochastic_slow(ticker_data)
+        add_implied_volatility(ticker_data)
 
         # add color of days
         add_color_of_days(ticker_data)
@@ -561,7 +580,7 @@ def get_info(ticker, options=False, debug=False):
         elif not options and not debug:
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
-                'Limit-Order', 'Max-Shares', 'color', 'volume']]
+                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy']]
             print('Details for Stock-Trading:')
         else:
             ticker_data = ticker_data[[
@@ -579,6 +598,7 @@ def get_info(ticker, options=False, debug=False):
 def save_output_to_file(text):
     '''saves text into file with current date as title
     '''
+    # todo: create ouput folder is not existing
     filename = 'output/%s.txt' % current_date
     path = Path(filename)
 
@@ -622,7 +642,7 @@ def main(cron):
         save_output_to_file('\nBut watch out -> do not trade stocks with gaps in the chart!')
     else:
         choice1 = input(
-            'Do you trade stocks or options? 1=stocks (short format);' +
+            'Do you trade stocks or options? 1=stocks (short format); ' +
             '2=stocks (long format); 3=options; 4=debugging: ')
         if choice1 == '1':
             get_info(choice)
