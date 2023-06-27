@@ -42,7 +42,7 @@ MIN_STOCH_D = 50
 # how long the dataframe should be
 DAYS=120
 # max implied volatility value -> don't trade stocks that are too volatil
-MAX_IV = 50
+MAX_IV = 500
 
 LOCK = threading.Lock()
 
@@ -174,6 +174,40 @@ def get_ticker_data_tradier(symbol):
     else:
         #print("Error occurred while fetching stock data.")
         return None
+
+
+def set_earnings_date_tradier(dataframe, symbol):
+
+    headers = {
+        'Authorization': f'Bearer {API_KEY}',
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
+        ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+    }
+
+    response = requests.get(f'https://api.tradier.com/beta/markets/fundamentals/calendars?symbols={symbol}', headers=headers, timeout=1)
+    quote_data = response.json()
+
+    corporate_data = quote_data[0]['results'][0]['tables']['corporate_calendars']
+
+    curr_date = datetime.now().date()
+    end_date = curr_date + timedelta(days=30)
+
+    dataframe['next_earnings_event'] = np.nan
+
+    if corporate_data is not None:
+        # filter data on date
+        date_filtered_data = [item for item in corporate_data if curr_date <= datetime.fromisoformat(item['begin_date_time']).date() <= end_date]
+
+        # check if earnings event is present
+        earnings_filtered_data = [item for item in date_filtered_data if "Earnings" in item['event']]
+
+        dataframe.loc[dataframe.index[-1], 'next_earnings_event'] = earnings_filtered_data[-1]['begin_date_time']
+        
+        #print(earnings_filtered_data)
+        #has_earnings = earnings_filtered_data is not None
+        #print(has_earnings)
+
 
 
 def get_ticker_data_yahoo(symbol):
@@ -573,6 +607,10 @@ def get_info(ticker, options=False, debug=False):
         # add color of days
         add_color_of_days(ticker_data)
 
+        # todo: yahoo finance data
+        if TRADIER: set_earnings_date_tradier(ticker_data, ticker)
+        else: ticker_data['next_earnings_event'] = np.nan
+
         if options:
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Strike-Price', 'color']]
@@ -580,7 +618,7 @@ def get_info(ticker, options=False, debug=False):
         elif not options and not debug:
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
-                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy']]
+                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event']]
             print('Details for Stock-Trading:')
         else:
             ticker_data = ticker_data[[
@@ -598,7 +636,7 @@ def get_info(ticker, options=False, debug=False):
 def save_output_to_file(text):
     '''saves text into file with current date as title
     '''
-    # todo: create ouput folder is not existing
+    # todo: create output folder if not existing
     filename = 'output/%s.txt' % current_date
     path = Path(filename)
 
