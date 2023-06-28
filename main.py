@@ -41,8 +41,10 @@ MIN_RSI = 50
 MIN_STOCH_D = 50
 # how long the dataframe should be
 DAYS=120
-# max implied volatility value -> don't trade stocks that are too volatil
-MAX_IV = 500
+# max implied volatility value -> don't trade stocks that are too volatile
+MAX_IV = 100
+# timeout for request in seconds
+TIMEOUT = 3
 
 LOCK = threading.Lock()
 
@@ -94,7 +96,7 @@ def get_sp500_symbols():
     '''returns list of s&p 500 listed symbols.
     '''
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-    response = requests.get(url, timeout=5)
+    response = requests.get(url, timeout=TIMEOUT)
     soup = BeautifulSoup(response.text, 'html.parser')
     table = soup.find('table', {'class': 'wikitable sortable'})
     symbols = []
@@ -154,7 +156,7 @@ def get_ticker_data_tradier(symbol):
         'end': current_date
     }
 
-    response = requests.get(url, headers=headers, params=params, timeout=1)
+    response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
 
     # Process the response
     if response.status_code == 200:
@@ -185,7 +187,7 @@ def set_earnings_date_tradier(dataframe, symbol):
         ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
     }
 
-    response = requests.get(f'https://api.tradier.com/beta/markets/fundamentals/calendars?symbols={symbol}', headers=headers, timeout=1)
+    response = requests.get(f'https://api.tradier.com/beta/markets/fundamentals/calendars?symbols={symbol}', headers=headers, timeout=TIMEOUT)
     quote_data = response.json()
 
     corporate_data = quote_data[0]['results'][0]['tables']['corporate_calendars']
@@ -202,7 +204,8 @@ def set_earnings_date_tradier(dataframe, symbol):
         # check if earnings event is present
         earnings_filtered_data = [item for item in date_filtered_data if "Earnings" in item['event']]
 
-        dataframe.loc[dataframe.index[-1], 'next_earnings_event'] = earnings_filtered_data[-1]['begin_date_time']
+        if len(earnings_filtered_data) > 0:
+            dataframe.loc[dataframe.index[-1], 'next_earnings_event'] = earnings_filtered_data[-1]['begin_date_time']
         
         #print(earnings_filtered_data)
         #has_earnings = earnings_filtered_data is not None
@@ -230,7 +233,7 @@ def get_ticker_data_yahoo(symbol):
     }
 
     # send request
-    response = requests.get(url, params, headers=headers, timeout=5)
+    response = requests.get(url, params, headers=headers, timeout=TIMEOUT)
 
     if response.status_code == 200:
         # get JSON response
@@ -278,7 +281,7 @@ def get_option_strike_price_yahoo(ticker, target_price):
         'period2': int(pd.Timestamp(current_date).timestamp()),
         'interval': '1d',
     }
-    response = requests.get(url, params, headers=headers, timeout=5)
+    response = requests.get(url, params, headers=headers, timeout=TIMEOUT)
 
     if response.status_code == 200:
         data = response.json()
@@ -521,6 +524,7 @@ def analyze_ticker(ticker):
         add_macd_data(ticker_data)
         add_rsi_data(ticker_data)
         add_stochastic_slow(ticker_data)
+        add_implied_volatility(ticker_data)
 
         # add color of days
         add_color_of_days(ticker_data)
