@@ -588,7 +588,7 @@ def process_algorithm():
     print('%d stocks in  Nasdaq, NYSE, DJIA and S&P500 analyzed' % len(tickers))
 
 
-def get_info(ticker, options=False, debug=False):
+def get_info(ticker, options=False, debug=False, mobile=False):
     '''prints the ticker data.
 
     Keyword arguments:
@@ -619,17 +619,21 @@ def get_info(ticker, options=False, debug=False):
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Strike-Price', 'color']]
             print('Details for OPTIONS-Trading:')
-        elif not options and not debug:
+        elif mobile:
             ticker_data = ticker_data[[
-                'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
-                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event']]
-            print('Details for Stock-Trading:')
-        else:
+                'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss', 'Limit-Order']]
+            print('Details for Stock-Trading (mobile format):')
+        elif debug:
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'open', 'low', 'MACD Line',
                 'Signal Line', '%K', '%D', 'RSI', 'volume', 'color']]
             print('Details for debugging:')
-
+        else:
+            ticker_data = ticker_data[[
+                'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
+                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event']]
+            print('Details for Stock-Trading:')
+            
         print(ticker_data)
         print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %
               (ticker, ticker))
@@ -685,15 +689,17 @@ def main(cron):
     else:
         choice1 = input(
             'Do you trade stocks or options? 1=stocks (short format); ' +
-            '2=stocks (long format); 3=options; 4=debugging: ')
+            '2=stocks (long format); 3=stocks (mobile format); 4=options; 5=debugging: ')
         if choice1 == '1':
             get_info(choice)
         elif choice1 == '2':
             pd.set_option('display.max_rows', None)
             get_info(choice)
         elif choice1 == '3':
-            get_info(choice, True)
+            get_info(choice, mobile=True)
         elif choice1 == '4':
+            get_info(choice, True)
+        elif choice1 == '5':
             get_info(choice, False, True)
         else:
             print('Wrong input!')
