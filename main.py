@@ -621,7 +621,7 @@ def get_info(ticker, options=False, debug=False, mobile=False):
             print('Details for OPTIONS-Trading:')
         elif mobile:
             ticker_data = ticker_data[[
-                'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss', 'Limit-Order']]
+                'ticker', 'close', 'Next-Entry', 'Stop-Loss', 'Limit-Order']]
             print('Details for Stock-Trading (mobile format):')
         elif debug:
             ticker_data = ticker_data[[
