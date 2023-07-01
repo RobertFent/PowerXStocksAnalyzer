@@ -193,19 +193,43 @@ def set_earnings_date_tradier(dataframe, symbol):
     corporate_data = quote_data[0]['results'][0]['tables']['corporate_calendars']
 
     curr_date = datetime.now().date()
-    end_date = curr_date + timedelta(days=30)
+    start_date = curr_date - timedelta(days=120)
+    end_date = curr_date + timedelta(days=120)
 
     dataframe['next_earnings_event'] = np.nan
+    dataframe['latest_earnings_event'] = np.nan
 
     if corporate_data is not None:
         # filter data on date
-        date_filtered_data = [item for item in corporate_data if curr_date <= datetime.fromisoformat(item['begin_date_time']).date() <= end_date]
+        date_filtered_data = [item for item in corporate_data if start_date <= datetime.fromisoformat(item['begin_date_time']).date() <= end_date]
 
         # check if earnings event is present
-        earnings_filtered_data = [item for item in date_filtered_data if "Earnings" in item['event']]
+        earnings_filtered_data = [datetime.fromisoformat(item['begin_date_time']).date() for item in date_filtered_data if "Earnings" in item['event']]
 
         if len(earnings_filtered_data) > 0:
-            dataframe.loc[dataframe.index[-1], 'next_earnings_event'] = earnings_filtered_data[-1]['begin_date_time']
+
+            lastest_date, next_date = None, None
+            for date in earnings_filtered_data:
+
+                # get latest event
+                if lastest_date is None:
+                    if date < curr_date:
+                        lastest_date = date
+                else:
+                    if date < curr_date and date > lastest_date:
+                        lastest_date = date
+
+                # get next event
+                if next_date is None:
+                    if date >= curr_date:
+                        next_date = date
+                else:
+                    if date > curr_date and date < next_date:
+                        next_date = date
+
+                
+            dataframe.loc[dataframe.index[-1], 'next_earnings_event'] = next_date
+            dataframe.loc[dataframe.index[-1], 'latest_earnings_event'] = lastest_date
         
         #print(earnings_filtered_data)
         #has_earnings = earnings_filtered_data is not None
@@ -612,8 +636,11 @@ def get_info(ticker, options=False, debug=False, mobile=False):
         add_color_of_days(ticker_data)
 
         # todo: yahoo finance data
-        if TRADIER: set_earnings_date_tradier(ticker_data, ticker)
-        else: ticker_data['next_earnings_event'] = np.nan
+        if TRADIER:
+            set_earnings_date_tradier(ticker_data, ticker)
+        else:
+            ticker_data['next_earnings_event'] = np.nan
+            ticker_data['latest_earnings_event'] = np.nan
 
         if options:
             ticker_data = ticker_data[[
@@ -631,7 +658,7 @@ def get_info(ticker, options=False, debug=False, mobile=False):
         else:
             ticker_data = ticker_data[[
                 'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
-                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event']]
+                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
             print('Details for Stock-Trading:')
             
         print(ticker_data)
