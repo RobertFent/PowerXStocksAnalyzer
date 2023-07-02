@@ -283,15 +283,75 @@ def get_ticker_data_yahoo(symbol):
     return None
 
 
-# todo
-def get_option_strike_price_tradier(ticker, target_price):
-    '''todo
+def set_option_data_tradier(ticker, dataframe, target_price):
+    '''sets next price below current price, fitting exp. date, spreads etc.
+
+    Keyword arguments:
+    ticker -- symbol of stock
+    dataframe -- ticker data as pd dataframe
+    target_price -- current price of stock
     '''
-    return None
+
+    dataframe['Strike-Price'] = np.nan
+    dataframe['Exp.-Date'] = np.nan
+    dataframe['Option-High'] = np.nan
+    dataframe['bid'] = np.nan
+    dataframe['ask'] = np.nan
+    dataframe['effective-spread'] = np.nan
+
+    response = requests.get('https://api.tradier.com/v1/markets/options/expirations',
+        params={'symbol': ticker, 'includeAllRoots': 'true', 'strikes': 'true'},
+        headers={'Authorization': f'Bearer {API_KEY}', 'Accept': 'application/json'},
+        timeout=TIMEOUT
+    )
+
+    options = response.json()
+
+    if response.status_code == 200:
+
+        fitting_options = []
+
+        curr_date = datetime.now().date()
+        min_date = curr_date + timedelta(days=30)
+        max_date = curr_date + timedelta(days=45)
+        for option in options['expirations']['expiration']:
+            curr_option_date = datetime.fromisoformat(option['date']).date()
+            if curr_option_date > min_date and curr_option_date < max_date:
+                fitting_options.append(option)
+
+        if len(fitting_options) > 0:
+            next_price = 0
+            for strike in fitting_options[0]['strikes']['strike']:
+                if strike < target_price and strike > next_price:
+                    next_price = strike
+
+            response = requests.get('https://api.tradier.com/v1/markets/options/chains',
+            params={'symbol': ticker, 'expiration': fitting_options[0]['date'], 'greeks': 'true'},
+            headers={'Authorization': f'Bearer {API_KEY}', 'Accept': 'application/json'},
+            timeout=TIMEOUT)
+
+            options = response.json()
+
+            if response.status_code == 200:
+                for option in options['options']['option']:
+                    # should always be only one
+                    if(option['strike'] == next_price and "Call" in option['description']):
+                        mid = option['ask'] - option['bid']
+                        # https://en.wikipedia.org/wiki/Bid–ask_spread#Effective_spread
+                        effective_spread = 2 * (np.abs(option['close'] - mid)/mid) * 100
+                        dataframe.loc[dataframe.index[-1], 'ask'] = option['ask']
+                        dataframe.loc[dataframe.index[-1], 'bid'] = option['bid']
+                        dataframe.loc[dataframe.index[-1], 'effective_spread'] = effective_spread
+                        dataframe.loc[dataframe.index[-1], 'symbol'] = option['symbol']
+                        dataframe.loc[dataframe.index[-1], 'opt-close'] = option['close']
+                        dataframe.loc[dataframe.index[-1], 'opt-high'] = option['high']
+
+            dataframe.loc[dataframe.index[-1], 'Strike-Price'] = next_price
+            dataframe.loc[dataframe.index[-1], 'Exp.-Date'] = fitting_options[0]['date']
 
 
-# todo
-def get_option_strike_price_yahoo(ticker, target_price):
+# todo: set instead of return
+def set_option_data_yahoo(ticker, dataframe, target_price):
     '''todo: exp. etc.
     '''
     url = 'https://query2.finance.yahoo.com/v7/finance/options/' + ticker
@@ -326,10 +386,6 @@ def get_option_strike_price_yahoo(ticker, target_price):
                     print(option)
                     return option['strike'], option['contractSymbol']
                 """
-                if strike_price < target_price:
-                    return strike_price
-
-    return None
 
 
 def add_macd_data(dataframe):
@@ -494,7 +550,6 @@ def add_order_values(dataframe):
     stop_loss = [None] * 6
     limit_order = [None] * 6
     shares_to_buy = [None] * 6
-    strike_price = [None] * (len(dataframe) - 1)
 
     for i in range(len(dataframe)):
         # print(dataframe.iloc[[i]])
@@ -522,17 +577,16 @@ def add_order_values(dataframe):
             stop_loss.append(stop_loss_current_day)
             limit_order.append(limit_order_current_day)
 
-    strike_price.append(get_option_strike_price_tradier(
-        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), entry[len(entry)-1])
-        if TRADIER == 'True' else get_option_strike_price_tradier(
-        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(),entry[len(entry)-1]))
+    # add data for options trading
+    (set_option_data_tradier(dataframe.iloc[[len(dataframe)-1]]['ticker'].item(),
+                             dataframe, entry[len(entry)-1]) if TRADIER == 'True' else set_option_data_yahoo(
+        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), dataframe, entry[len(entry)-1]))
 
     # dataframe['ADR'] = adr
     dataframe['Next-Entry'] = entry
     dataframe['Stop-Loss'] = stop_loss
     dataframe['Limit-Order'] = limit_order
     dataframe['Max-Shares'] = shares_to_buy
-    dataframe['Strike-Price'] = strike_price
 
 
 def analyze_ticker(ticker):
@@ -641,10 +695,10 @@ def get_info(ticker, options=False, debug=False, mobile=False):
         else:
             ticker_data['next_earnings_event'] = np.nan
             ticker_data['latest_earnings_event'] = np.nan
-
         if options:
             ticker_data = ticker_data[[
-                'ticker', 'high', 'close', 'Next-Entry', 'Strike-Price', 'color']]
+                'ticker', 'symbol', 'Strike-Price', 'Exp.-Date', 'opt-high', 'opt-close',
+                'bid', 'ask', 'effective_spread', 'color', 'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
             print('Details for OPTIONS-Trading:')
         elif mobile:
             ticker_data = ticker_data[[
