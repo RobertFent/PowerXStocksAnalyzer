@@ -336,9 +336,12 @@ def set_option_data_tradier(ticker, dataframe, target_price):
                 for option in options['options']['option']:
                     # should always be only one
                     if(option['strike'] == next_price and "Call" in option['description']):
-                        mid = option['ask'] - option['bid']
-                        # https://en.wikipedia.org/wiki/Bid–ask_spread#Effective_spread
-                        effective_spread = 2 * (np.abs(option['close'] - mid)/mid) * 100
+                        if option['close'] is not None:
+                            mid = option['ask'] - option['bid']
+                            # https://en.wikipedia.org/wiki/Bid–ask_spread#Effective_spread
+                            effective_spread = 2 * (np.abs(option['close'] - mid)/mid) * 100
+                        else:
+                            effective_spread = None
                         dataframe.loc[dataframe.index[-1], 'ask'] = option['ask']
                         dataframe.loc[dataframe.index[-1], 'bid'] = option['bid']
                         dataframe.loc[dataframe.index[-1], 'effective_spread'] = effective_spread
@@ -720,6 +723,7 @@ def get_info(ticker, options=False, debug=False, mobile=False):
               (ticker, ticker))
     except Exception as e:
         print(str(e))
+        print(e.with_traceback())
 
 
 def save_output_to_file(text):
