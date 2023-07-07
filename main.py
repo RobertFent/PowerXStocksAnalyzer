@@ -693,7 +693,7 @@ def get_info(ticker, options=False, debug=False, mobile=False):
         add_color_of_days(ticker_data)
 
         # todo: yahoo finance data
-        if TRADIER:
+        if TRADIER == 'True':
             set_earnings_date_tradier(ticker_data, ticker)
         else:
             ticker_data['next_earnings_event'] = np.nan
@@ -730,7 +730,9 @@ def save_output_to_file(text):
     '''saves text into file with current date as title
     '''
     # todo: create output folder if not existing
-    filename = 'output/%s.txt' % current_date
+    log_date = (datetime.now().astimezone(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d')
+                if TRADIER == 'True' else current_date)
+    filename = 'output/%s.txt' % log_date
     path = Path(filename)
 
     # file exists
@@ -750,9 +752,10 @@ def main(cron):
     '''
     # set dates properly for yahoo or tradier
     set_dates('%Y-%m-%d') if TRADIER == 'True' else set_dates()
+    print('Welcome to PowerXStocksAnalyzer!\nLast day to analyze is: %s' % (current_date))
     choice = (input(
-        'Welcome to PowerXStocksAnalyzer!\nWhat do you want to do? 1: get a list of stocks in ' +
-        'buy zone | short position or {ticker symbol}: get specific info of a given symbol?: ')
+        'What do you want to do? 1: get a list of stocks in ' +
+        'buy zone | put position or {ticker symbol}: get specific info of a given symbol?: ')
         if cron != 1 else None)
     if choice == '1' or cron == 1:
         process_algorithm()
@@ -764,7 +767,7 @@ def main(cron):
             for winner in winning_stocks:
                 save_output_to_file('https://finance.yahoo.com/chart/' + winner)
         # loser
-        save_output_to_file('\nStocks in short position:\n' + ', '.join(losing_stocks))
+        save_output_to_file('\nStocks in put position:\n' + ', '.join(losing_stocks))
         if len(losing_stocks) > 0:
             save_output_to_file('\nCheck out the stocks here:')
             for loser in losing_stocks:
