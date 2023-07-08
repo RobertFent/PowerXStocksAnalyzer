@@ -283,7 +283,7 @@ def get_ticker_data_yahoo(symbol):
     return None
 
 
-def set_option_data_tradier(ticker, dataframe, target_price):
+def set_option_data_tradier(ticker, dataframe, target_price, put):
     '''sets next price below current price, fitting exp. date, spreads etc.
 
     Keyword arguments:
@@ -291,13 +291,6 @@ def set_option_data_tradier(ticker, dataframe, target_price):
     dataframe -- ticker data as pd dataframe
     target_price -- current price of stock
     '''
-
-    dataframe['Strike-Price'] = np.nan
-    dataframe['Exp.-Date'] = np.nan
-    dataframe['Option-High'] = np.nan
-    dataframe['bid'] = np.nan
-    dataframe['ask'] = np.nan
-    dataframe['effective-spread'] = np.nan
 
     response = requests.get('https://api.tradier.com/v1/markets/options/expirations',
         params={'symbol': ticker, 'includeAllRoots': 'true', 'strikes': 'true'},
@@ -319,38 +312,62 @@ def set_option_data_tradier(ticker, dataframe, target_price):
             if curr_option_date > min_date and curr_option_date < max_date:
                 fitting_options.append(option)
 
+        # todo: values not shown after 9am
+
+        # set strike depending on put or call
         if len(fitting_options) > 0:
-            next_price = 0
-            for strike in fitting_options[0]['strikes']['strike']:
-                if strike < target_price and strike > next_price:
-                    next_price = strike
+            if put:
+                next_price = MAX_STOCKPRICE + 1
+                for strike in fitting_options[-1]['strikes']['strike']:
+                    if strike > target_price and strike < next_price:
+                        next_price = strike
+            else:
+                next_price = 0
+                for strike in fitting_options[-1]['strikes']['strike']:
+                    if strike < target_price and strike > next_price:
+                        next_price = strike
 
             response = requests.get('https://api.tradier.com/v1/markets/options/chains',
-            params={'symbol': ticker, 'expiration': fitting_options[0]['date'], 'greeks': 'true'},
+            params={'symbol': ticker, 'expiration': fitting_options[-1]['date'], 'greeks': 'true'},
             headers={'Authorization': f'Bearer {API_KEY}', 'Accept': 'application/json'},
             timeout=TIMEOUT)
 
             options = response.json()
 
+            fitting_option = None
+
             if response.status_code == 200:
                 for option in options['options']['option']:
                     # should always be only one
-                    if(option['strike'] == next_price and "Call" in option['description']):
-                        if option['close'] is not None:
-                            mid = option['ask'] - option['bid']
-                            # https://en.wikipedia.org/wiki/Bid–ask_spread#Effective_spread
-                            effective_spread = 2 * (np.abs(option['close'] - mid)/mid) * 100
-                        else:
-                            effective_spread = None
-                        dataframe.loc[dataframe.index[-1], 'ask'] = option['ask']
-                        dataframe.loc[dataframe.index[-1], 'bid'] = option['bid']
-                        dataframe.loc[dataframe.index[-1], 'effective_spread'] = effective_spread
-                        dataframe.loc[dataframe.index[-1], 'symbol'] = option['symbol']
-                        dataframe.loc[dataframe.index[-1], 'opt-close'] = option['close']
-                        dataframe.loc[dataframe.index[-1], 'opt-high'] = option['high']
+                    if (put and option['strike'] == next_price and "Put" in option['description']):
+                        fitting_option = option
+                    if (not put and option['strike'] == next_price and "Call" in option['description']):
+                        fitting_option = option
 
-            dataframe.loc[dataframe.index[-1], 'Strike-Price'] = next_price
-            dataframe.loc[dataframe.index[-1], 'Exp.-Date'] = fitting_options[0]['date']
+                if fitting_option is not None:
+                    if fitting_option['close'] is not None:
+                        mid = fitting_option['ask'] - fitting_option['bid']
+                        # https://en.wikipedia.org/wiki/Bid–ask_spread#Effective_spread
+                        effective_spread = 2 * (np.abs(fitting_option['close'] - mid)/mid) * 100
+                    else:
+                        effective_spread = None
+
+                    greeks = fitting_option['greeks']
+
+                    dataframe.loc[dataframe.index[-1], 'option-type'] = fitting_option['option_type']
+                    dataframe.loc[dataframe.index[-1], 'ask'] = fitting_option['ask']
+                    dataframe.loc[dataframe.index[-1], 'bid'] = fitting_option['bid']
+                    dataframe.loc[dataframe.index[-1], 'effective_spread'] = effective_spread
+                    dataframe.loc[dataframe.index[-1], 'symbol'] = fitting_option['symbol']
+                    dataframe.loc[dataframe.index[-1], 'opt.-high'] = fitting_option['high']
+                    dataframe.loc[dataframe.index[-1], 'opt.-close'] = fitting_option['close']
+                    dataframe.loc[dataframe.index[-1], 'delta'] = greeks['delta']
+                    dataframe.loc[dataframe.index[-1], 'gamma'] = greeks['gamma']
+                    dataframe.loc[dataframe.index[-1], 'theta'] = greeks['theta']
+                    dataframe.loc[dataframe.index[-1], 'vega'] = greeks['vega']
+
+            dataframe.loc[dataframe.index[-1], 'strike-price'] = next_price
+            dataframe.loc[dataframe.index[-1], 'exp.-date'] = fitting_options[-1]['date']
 
 
 # todo: set instead of return
@@ -412,25 +429,6 @@ def add_rsi_data(dataframe):
 
     Keyword arguments:
     dataframe -- ticker data as pd dataframe
-    '''
-    '''old code
-    price_changes = dataframe['close'].diff()
-
-    # Separate gains and losses
-    gains = price_changes.where(price_changes > 0, 0)
-    losses = -price_changes.where(price_changes < 0, 0)
-
-    # Calculate average gain and average loss over 7-day period
-    avg_gain = gains.rolling(window=7, min_periods=1).mean()
-    avg_loss = losses.rolling(window=7, min_periods=1).mean()
-
-    # Calculate relative strength (RS)
-    rs = avg_gain / avg_loss
-
-    # Calculate RSI
-    rsi = 100 - (100 / (1 + rs))
-
-    dataframe['RSI'] = rsi
     '''
     rsi = ta.rsi(dataframe['close'], length=7)
     dataframe['RSI'] = rsi
@@ -541,7 +539,7 @@ def is_loser(dataframe):
             dataframe.iloc[[len(dataframe)-1]]['volume'].item() > MIN_VOLUME)
 
 
-def add_order_values(dataframe):
+def add_order_values(dataframe, options, put):
     '''add stock and option trading data.
 
     Keyword arguments:
@@ -581,9 +579,10 @@ def add_order_values(dataframe):
             limit_order.append(limit_order_current_day)
 
     # add data for options trading
-    (set_option_data_tradier(dataframe.iloc[[len(dataframe)-1]]['ticker'].item(),
-                             dataframe, entry[len(entry)-1]) if TRADIER == 'True' else set_option_data_yahoo(
-        dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), dataframe, entry[len(entry)-1]))
+    if options:
+        (set_option_data_tradier(dataframe.iloc[[len(dataframe)-1]]['ticker'].item(),
+                                dataframe, entry[len(entry)-1], put) if TRADIER == 'True' else set_option_data_yahoo(
+            dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), dataframe, entry[len(entry)-1]))
 
     # dataframe['ADR'] = adr
     dataframe['Next-Entry'] = entry
@@ -669,7 +668,7 @@ def process_algorithm():
     print('%d stocks in  Nasdaq, NYSE, DJIA and S&P500 analyzed' % len(tickers))
 
 
-def get_info(ticker, options=False, debug=False, mobile=False):
+def get_info(ticker, options=False, debug=False, mobile=False, put=False):
     '''prints the ticker data.
 
     Keyword arguments:
@@ -680,7 +679,7 @@ def get_info(ticker, options=False, debug=False, mobile=False):
         ticker_data = (get_ticker_data_tradier(ticker) if TRADIER == 'True'
                        else get_ticker_data_yahoo(ticker))
 
-        add_order_values(ticker_data)
+        add_order_values(ticker_data, options, put)
 
         # for debugging
         # add needed values
@@ -698,10 +697,16 @@ def get_info(ticker, options=False, debug=False, mobile=False):
         else:
             ticker_data['next_earnings_event'] = np.nan
             ticker_data['latest_earnings_event'] = np.nan
+        # call
         if options:
-            ticker_data = ticker_data[[
-                'ticker', 'symbol', 'Strike-Price', 'Exp.-Date', 'opt-high', 'opt-close',
-                'bid', 'ask', 'effective_spread', 'color', 'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
+            if mobile:
+                ticker_data = ticker_data[[
+                    'ticker', 'symbol', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
+                    'color', 'next_earnings_event', 'latest_earnings_event']]
+            else:
+                ticker_data = ticker_data[[
+                    'ticker', 'symbol', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
+                    'bid', 'ask', 'effective_spread', 'color', 'implied_volatilitiy', 'delta', 'gamma', 'theta', 'vega', 'next_earnings_event', 'latest_earnings_event']]
             print('Details for OPTIONS-Trading:')
         elif mobile:
             ticker_data = ticker_data[[
@@ -718,7 +723,7 @@ def get_info(ticker, options=False, debug=False, mobile=False):
                 'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
             print('Details for Stock-Trading:')
             
-        print(ticker_data)
+        print(ticker_data) if not options else print(ticker_data.iloc[-1:])
         print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %
               (ticker, ticker))
     except Exception as e:
@@ -777,7 +782,7 @@ def main(cron):
     else:
         choice1 = input(
             'Do you trade stocks or options? 1=stocks (short format); ' +
-            '2=stocks (long format); 3=stocks (mobile format); 4=options; 5=debugging: ')
+            '2=stocks (long format); 3=stocks (mobile format); 4=options (call); 5=options (call, mobile); 6=options (put); 7=options (put, mobile); 8=debugging: ')
         if choice1 == '1':
             get_info(choice)
         elif choice1 == '2':
@@ -788,6 +793,12 @@ def main(cron):
         elif choice1 == '4':
             get_info(choice, True)
         elif choice1 == '5':
+            get_info(choice, True, mobile=True)
+        elif choice1 == '6':
+            get_info(choice, True, put=True)
+        elif choice1 == '7':
+            get_info(choice, True, mobile=True, put=True)
+        elif choice1 == '8':
             get_info(choice, False, True)
         else:
             print('Wrong input!')
