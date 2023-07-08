@@ -2,6 +2,8 @@
 
 may use tradier or yahoo finance data (based on vars in .env)
 
+option data only available via yahoo trading
+
 example usage:
 python3 ./main.py
 
