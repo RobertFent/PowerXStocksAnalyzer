@@ -179,6 +179,12 @@ def get_ticker_data_tradier(symbol):
 
 
 def set_earnings_date_tradier(dataframe, symbol):
+    '''appends next and last earning date to dataframe
+
+    Keyword arguments:
+    dataframe -- ticker data as pd dataframe
+    symbol -- symbol of stock
+    '''
 
     headers = {
         'Authorization': f'Bearer {API_KEY}',
@@ -241,7 +247,7 @@ def get_ticker_data_yahoo(symbol):
     '''returns dataframe with all needed data of given symbol from yahoo.finance api.
 
     Keyword arguments:
-    ticker -- symbol of stock
+    symbol -- symbol of stock
     '''
 
     url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + symbol
@@ -368,44 +374,6 @@ def set_option_data_tradier(ticker, dataframe, target_price, put):
 
             dataframe.loc[dataframe.index[-1], 'strike-price'] = next_price
             dataframe.loc[dataframe.index[-1], 'exp.-date'] = fitting_options[-1]['date']
-
-
-# todo: set instead of return
-def set_option_data_yahoo(ticker, dataframe, target_price):
-    '''todo: exp. etc.
-    '''
-    url = 'https://query2.finance.yahoo.com/v7/finance/options/' + ticker
-
-    # header for request to not get forbidden error
-    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36' +
-               ' (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
-
-    params = {
-        'period1': int(pd.Timestamp(past_date).timestamp()),
-        'period2': int(pd.Timestamp(current_date).timestamp()),
-        'interval': '1d',
-    }
-    response = requests.get(url, params, headers=headers, timeout=TIMEOUT)
-
-    if response.status_code == 200:
-        data = response.json()
-        options = data['optionChain']['result'][0]['options']
-        if options:
-            calls = data['optionChain']['result'][0]['options'][0]['calls']
-            # iterate over inverted list to start with max call and break at first call lower
-            for call in calls[::-1]:
-                strike_price = call['strike']
-                """
-                expiration_date = option['expiration']
-                # contract should expire within 30-45 days
-                future1 = (datetime.now() + timedelta(days=10)).timestamp()
-                future2 = (datetime.now() + timedelta(days=45)).timestamp()
-                if (strike_price < target_price and
-                    expiration_date > future1 and
-                        expiration_date < future2):
-                    print(option)
-                    return option['strike'], option['contractSymbol']
-                """
 
 
 def add_macd_data(dataframe):
@@ -579,10 +547,8 @@ def add_order_values(dataframe, options, put):
             limit_order.append(limit_order_current_day)
 
     # add data for options trading
-    if options:
-        (set_option_data_tradier(dataframe.iloc[[len(dataframe)-1]]['ticker'].item(),
-                                dataframe, entry[len(entry)-1], put) if TRADIER == 'True' else set_option_data_yahoo(
-            dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), dataframe, entry[len(entry)-1]))
+    if options and TRADIER == 'True':
+        set_option_data_tradier(dataframe.iloc[[len(dataframe)-1]]['ticker'].item(), dataframe, entry[len(entry)-1], put)
 
     # dataframe['ADR'] = adr
     dataframe['Next-Entry'] = entry
