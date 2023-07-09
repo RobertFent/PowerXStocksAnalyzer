@@ -34,7 +34,9 @@ MAX_STOCKPRICE = 80
 # only stocks with at least this daily volume
 MIN_VOLUME = 10000000
 # value of my deposit
-DEPOSIT_VALUE = 10000
+DEPOSIT_VALUE = 5000
+# max loss in percent
+MAX_LOSS = 0.01
 # RSI > 80 may indicate overbought -> use 85 because of difference to yahoos charts
 MAX_RSI = 85
 # RSI > 50 -> use 60 because of difference to yahoos charts
@@ -540,7 +542,7 @@ def add_order_values(dataframe, options, put):
             limit_order_current_day = next_entry + 2 * current_adr
             # max amount of shares to buy to not loose more than 2% of depot in case of stop-loss
             max_shares_current_day = (
-                DEPOSIT_VALUE*0.02) / (next_entry - stop_loss_current_day)
+                DEPOSIT_VALUE*MAX_LOSS) / (next_entry - stop_loss_current_day)
 
             # append all needed values
             shares_to_buy.append(max_shares_current_day)
