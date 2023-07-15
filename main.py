@@ -638,7 +638,7 @@ def process_algorithm():
     print('%d stocks in  Nasdaq, NYSE, DJIA and S&P500 analyzed' % len(tickers))
 
 
-def get_info(ticker, options=False, debug=False, mobile=False, put=False):
+def get_info(ticker, options=False, debug=False, mobile=False, put=False, logfile=False):
     '''prints the ticker data.
 
     Keyword arguments:
@@ -667,38 +667,46 @@ def get_info(ticker, options=False, debug=False, mobile=False, put=False):
         else:
             ticker_data['next_earnings_event'] = np.nan
             ticker_data['latest_earnings_event'] = np.nan
-        # call
-        if options:
-            if mobile:
+        if not logfile:
+            if options:
+                if mobile:
+                    ticker_data = ticker_data[[
+                        'ticker', 'symbol', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
+                        'color', 'next_earnings_event', 'latest_earnings_event']]
+                else:
+                    ticker_data = ticker_data[[
+                        'ticker', 'symbol', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
+                        'bid', 'ask', 'effective_spread', 'color', 'implied_volatilitiy', 'delta', 'gamma', 'theta', 'vega', 'next_earnings_event', 'latest_earnings_event']]
+                print('Details for OPTIONS-Trading:')
+            elif mobile:
                 ticker_data = ticker_data[[
-                    'ticker', 'symbol', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
-                    'color', 'next_earnings_event', 'latest_earnings_event']]
+                    'ticker', 'close', 'Next-Entry', 'Stop-Loss', 'Limit-Order']]
+                print('Details for Stock-Trading (mobile format):')
+            elif debug:
+                ticker_data = ticker_data[[
+                    'ticker', 'high', 'close', 'open', 'low', 'MACD Line',
+                    'Signal Line', '%K', '%D', 'RSI', 'volume', 'color']]
+                print('Details for debugging:')
             else:
                 ticker_data = ticker_data[[
-                    'ticker', 'symbol', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
-                    'bid', 'ask', 'effective_spread', 'color', 'implied_volatilitiy', 'delta', 'gamma', 'theta', 'vega', 'next_earnings_event', 'latest_earnings_event']]
-            print('Details for OPTIONS-Trading:')
-        elif mobile:
-            ticker_data = ticker_data[[
-                'ticker', 'close', 'Next-Entry', 'Stop-Loss', 'Limit-Order']]
-            print('Details for Stock-Trading (mobile format):')
-        elif debug:
-            ticker_data = ticker_data[[
-                'ticker', 'high', 'close', 'open', 'low', 'MACD Line',
-                'Signal Line', '%K', '%D', 'RSI', 'volume', 'color']]
-            print('Details for debugging:')
+                    'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
+                    'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
+                print('Details for Stock-Trading:')
+                
+            print(ticker_data) if not options else print(ticker_data.iloc[-1:])
+            print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %
+                (ticker, ticker))
+            
+        # write option data to logfile
+        # AFRM: "['symbol', 'strike-price', 'exp.-date', 'option-type', 'opt.-high', 'opt.-close', 'bid', 'ask', 'effective_spread', 'delta', 'gamma', 'theta', 'vega'] not in index"
         else:
             ticker_data = ticker_data[[
-                'ticker', 'high', 'close', 'Next-Entry', 'Stop-Loss',
-                'Limit-Order', 'Max-Shares', 'color', 'volume', 'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
-            print('Details for Stock-Trading:')
-            
-        print(ticker_data) if not options else print(ticker_data.iloc[-1:])
-        print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %
-              (ticker, ticker))
+                'ticker', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
+                'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
+            save_output_to_file(ticker_data.iloc[-1:])
     except Exception as e:
-        print(str(e))
-        print(e.with_traceback())
+        print(ticker + ': ' + str(e))
+        #print(e.with_traceback())
 
 
 def save_output_to_file(text):
@@ -713,13 +721,13 @@ def save_output_to_file(text):
     # file exists
     if path.is_file():
         with open(filename, 'a', encoding='UTF-8') as f:
-            print(text, file=f)
+            print(str(text), file=f)
 
     # create file if not existing
     else:
         with open(filename, 'w', encoding='UTF-8') as f:
             print(filename, file=f)
-            print(text, file=f)
+            print(str(text), file=f)
 
 
 def main(cron):
@@ -749,6 +757,19 @@ def main(cron):
                 save_output_to_file('https://finance.yahoo.com/chart/' + loser)
 
         save_output_to_file('\nBut watch out -> do not trade stocks with gaps in the chart!')
+
+        # log option output before trading day starts to get proper opt-high values
+        if cron == 1:
+            if (len(winning_stocks) > 0):
+                save_output_to_file('\nData for call options:\n')
+                for winner in winning_stocks:
+                    get_info(winner, options=True, logfile=True)
+            
+            if (len(losing_stocks) > 0):
+                save_output_to_file('\nData for call options:\n')
+                for loser in losing_stocks:
+                    get_info(loser, options=True, put=True, logfile=True)
+
     else:
         choice1 = input(
             'Do you trade stocks or options? 1=stocks (short format); ' +
@@ -770,6 +791,8 @@ def main(cron):
             get_info(choice, True, mobile=True, put=True)
         elif choice1 == '8':
             get_info(choice, False, True)
+        elif choice1 == '9':
+            get_info(choice, True, logfile=True)
         else:
             print('Wrong input!')
 
