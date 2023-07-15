@@ -4,4 +4,3 @@ requests
 bs4
 tqdm
 urllib3==1.26.6
-Flask
