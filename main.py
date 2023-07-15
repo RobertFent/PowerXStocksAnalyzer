@@ -694,8 +694,7 @@ def get_info(ticker, options=False, debug=False, mobile=False, put=False, logfil
                 print('Details for Stock-Trading:')
                 
             print(ticker_data) if not options else print(ticker_data.iloc[-1:])
-            print('Check out the chart for further details: https://finance.yahoo.com/quote/%s?p=%s' %
-                (ticker, ticker))
+            print('Check out the chart for further details: https://www.tradingview.com/chart/?symbol=' + ticker)
             
         # write option data to logfile
         # AFRM: "['symbol', 'strike-price', 'exp.-date', 'option-type', 'opt.-high', 'opt.-close', 'bid', 'ask', 'effective_spread', 'delta', 'gamma', 'theta', 'vega'] not in index"
@@ -748,13 +747,13 @@ def main(cron):
         if len(winning_stocks) > 0:
             save_output_to_file('\nCheck out the stocks here:')
             for winner in winning_stocks:
-                save_output_to_file('https://finance.yahoo.com/chart/' + winner)
+                save_output_to_file('https://www.tradingview.com/chart/?symbol=' + winner)
         # loser
         save_output_to_file('\nStocks in put position:\n' + ', '.join(losing_stocks))
         if len(losing_stocks) > 0:
             save_output_to_file('\nCheck out the stocks here:')
             for loser in losing_stocks:
-                save_output_to_file('https://finance.yahoo.com/chart/' + loser)
+                save_output_to_file('https://www.tradingview.com/chart/?symbol=' + loser)
 
         save_output_to_file('\nBut watch out -> do not trade stocks with gaps in the chart!')
 
