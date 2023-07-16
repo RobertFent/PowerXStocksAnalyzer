@@ -717,6 +717,9 @@ def save_output_to_file(text):
     filename = 'output/%s.txt' % log_date
     path = Path(filename)
 
+    # force dataframe to show all colums?
+    pd.set_option('display.max_columns', None)
+
     # file exists
     if path.is_file():
         with open(filename, 'a', encoding='UTF-8') as f:
