@@ -700,8 +700,7 @@ def get_info(ticker, options=False, debug=False, mobile=False, put=False, logfil
         # AFRM: "['symbol', 'strike-price', 'exp.-date', 'option-type', 'opt.-high', 'opt.-close', 'bid', 'ask', 'effective_spread', 'delta', 'gamma', 'theta', 'vega'] not in index"
         else:
             ticker_data = ticker_data[[
-                'ticker', 'strike-price', 'exp.-date', 'option-type','opt.-high', 'opt.-close',
-                'implied_volatilitiy', 'next_earnings_event', 'latest_earnings_event']]
+                'ticker', 'strike-price', 'exp.-date', 'option-type','opt.-high']]
             save_output_to_file(ticker_data.iloc[-1:])
     except Exception as e:
         print(ticker + ': ' + str(e))
