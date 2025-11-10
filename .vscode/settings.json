@@ -1,17 +1,6 @@
 {
-    "python.languageServer": "Pylance",
-    "python.linting.pylintEnabled": false,
-    "[python]": {
-        "editor.defaultFormatter": "ms-python.autopep8"
-    },
-    "python.formatting.provider": "none",
-    "python.linting.pylintArgs": [
-        "--disable=invalid-name",
-        "--disable=broad-exception-caught",
-        "--disable=consider-using-f-string",
-        "--disable=global-statement",
-        "--disable=pointless-string-statement",
-        "--disable=expression-not-assigned"
-    ]
-      
+  "python.languageServer": "Pylance",
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.autopep8"
+  }
 }

@@ -3,4 +3,6 @@ pandas_ta
 requests
 bs4
 tqdm
-urllib3==1.26.6
+urllib3
+pandas-market-calendars
+yfinance
