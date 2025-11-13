@@ -1,27 +1,40 @@
 # PowerXStocksAnalyzer
 Automation Tool for PowerXStrategy
 
+## setup venv
+```sh
+python3 -m pip install virtualenv
+python3 -m virtualenv venv
+source .venv/bin/activate
+```
+
+## Synthetic Long Indicators
+### install requirements
+```sh
+pip install -r requirements.txt
+```
+
+### start the tool
+```sh
+python3 synthetics.py
+```
+## PowerX Strategy (outdate)
 ### setup variable
 create .env
-```
+```sh
 cp example.env .env
 ```
 
 fill out .env with proper values
 
-### setup venv
-```
-python3 -m pip install virtualenv
-python3 -m virtualenv venv
-source ./venv/bin/activate
-```
+
 
 ### install requirements
-```
+```sh
 pip install -r requirements.txt
 ```
 
 ### start the tool
-```
-python3 main.py
+```sh
+python3 powerx.py
 ```
