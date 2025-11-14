@@ -1,3 +1,5 @@
+import psycopg2
+from psycopg2.extras import execute_values
 import csv
 from datetime import datetime, time, timedelta
 import concurrent
@@ -224,14 +226,85 @@ def get_symbol_names_as_list_from_winning_dfs(df_list: list[pd.DataFrame]) -> li
     return [symbol_df['Ticker'].iloc[0] for symbol_df in df_list]
 
 
+def insert_winners_into_database(dfs: list[str]) -> None:
+    try:
+        # todo: save secrets into .env
+        connection = psycopg2.connect(
+            host="ep-autumn-firefly-agz3pn7d-pooler.c-2.eu-central-1.aws.neon.tech",
+            port="5432",
+            dbname="neondb",
+            user="neondb_owner",
+            password="npg_hkUqD2typ1Zr"
+        )
+        for df in dfs:
+            insert_winner_into_database(df, connection)
+    except Exception as e:
+        print(f'Error inserting winning stock: {str(e)}')
+    finally:
+        connection.close()
+
+
+def insert_winner_into_database(df, connection):
+    '''Insert the latest row from a winner DataFrame into PostgreSQL.'''
+
+    # insert latest row into database
+    latest = df.iloc[-1]
+    query = """
+        INSERT INTO stock_winners (
+            ticker, date, close, high, low, open, volume,
+            ema20, ema50, macd_line, signal_line, rsi,
+            iv, willr
+        )
+        VALUES %s
+        ON CONFLICT (ticker, date)
+        DO UPDATE SET
+            close = EXCLUDED.close,
+            high = EXCLUDED.high,
+            low = EXCLUDED.low,
+            open = EXCLUDED.open,
+            volume = EXCLUDED.volume,
+            ema20 = EXCLUDED.ema20,
+            ema50 = EXCLUDED.ema50,
+            macd_line = EXCLUDED.macd_line,
+            signal_line = EXCLUDED.signal_line,
+            rsi = EXCLUDED.rsi,
+            iv = EXCLUDED.iv,
+            willr = EXCLUDED.willr,
+            inserted_at = NOW();
+    """
+
+    values = [(
+        latest['Ticker'],
+        latest['Date'],
+        float(latest['Close']),
+        float(latest['High']),
+        float(latest['Low']),
+        float(latest['Open']),
+        int(latest['Volume']),
+        float(latest['EMA20']),
+        float(latest['EMA50']),
+        float(latest['MACD Line']),
+        float(latest['Signal Line']),
+        float(latest['RSI']),
+        float(latest['IV']),
+        float(latest['WILLR'])
+    )]
+
+    with connection.cursor() as cur:
+        execute_values(cur, query, values)
+        connection.commit()
+        print(f"Inserted/updated latest row for {latest['Ticker']}")
+
+
 if __name__ == '__main__':
     print('Processing symbols and check for indicator matches...')
     symbols_from_csv = get_symbols_from_csv(INDEX_LIST)
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
 
     # debug statement for testing out winning stocks
-    symbol_df = return_symbol_df_if_is_winner(
-        'APA', start_timestamp, end_timestamp)
+    # symbol_df = return_symbol_df_if_is_winner(
+    #     'QCOM', start_timestamp, end_timestamp)
+    # print(symbol_df)
 
     start = datetime.now()
     winning_stock_dfs = analyze_symbols_multi_process(
@@ -241,7 +314,8 @@ if __name__ == '__main__':
     winning_symbols = get_symbol_names_as_list_from_winning_dfs(
         winning_stock_dfs)
 
-    # todo: parse last col. into database
+    # todo: insert all last 200 days for each stock
+    insert_winners_into_database(winning_stock_dfs)
 
     print(f'Processing took {duration_in_seconds} seconds')
     print('Criteria:')
