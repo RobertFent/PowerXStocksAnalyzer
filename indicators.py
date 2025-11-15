@@ -23,8 +23,9 @@ MAX_RSI = 60
 MIN_IV = 30
 MAX_IV = 70
 TRADING_DAYS_PER_YEAR = 252
-DAYS_IN_PAST_FOR_PROCESSING = 800
-DAYS_TO_UPDATE_IN_DATABASE = 10
+# change this to 250 more than days to update in db for more accurate results
+DAYS_IN_PAST_FOR_PROCESSING = 300
+DAYS_TO_UPDATE_IN_DATABASE = 7  # change this to increase the db insert window
 
 # must match filename in symbols folder
 INDEX_LIST = ['dow', 'nasdaq100', 'sp500']
@@ -163,17 +164,16 @@ def add_implied_volatility(dataframe: pd.DataFrame) -> pd.DataFrame:
     '''adds IV(30) values.
     '''
     modified_df = dataframe.copy()
+
+    # daily log returns
     modified_df['Daily Return in Percent'] = np.log(
         modified_df['Close']).diff()
 
-    # get latest 30 days
-    sample = modified_df['Daily Return in Percent'].iloc[-30:]
-    std_dev = sample.std()
-    annualized_std_dev = std_dev * np.sqrt(TRADING_DAYS_PER_YEAR)
+    # rolling std with min_periods=1 to calculate IV even for first days
+    rolling_std = modified_df['Daily Return in Percent'].rolling(
+        window=30, min_periods=1).std()
 
-    modified_df['IV'] = np.nan
-    modified_df.loc[modified_df.index[-1],
-                    'IV'] = annualized_std_dev * 100
+    modified_df['IV'] = rolling_std * np.sqrt(TRADING_DAYS_PER_YEAR) * 100
 
     return modified_df
 
