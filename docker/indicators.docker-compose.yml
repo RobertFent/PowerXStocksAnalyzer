@@ -1,0 +1,10 @@
+services:
+  indicators:
+    build:
+      context: ..
+      dockerfile: docker/indicators.Dockerfile
+    container_name: indicators
+    env_file:
+      - ../.env
+    volumes:
+      - ./logs:/indicators/logs

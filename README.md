@@ -16,7 +16,7 @@ pip install -r requirements.txt
 
 ### start the tool
 ```sh
-python3 synthetics.py
+python3 indicators.py
 ```
 ## PowerX Strategy (outdate)
 ### setup variable

@@ -1,8 +1,12 @@
-import psycopg2
-from psycopg2.extras import execute_values
+import os
+import sys
 import csv
 from datetime import datetime, time, timedelta
 import concurrent
+import logging
+from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import execute_values
 import numpy as np
 import pandas as pd
 import pytz
@@ -11,18 +15,33 @@ import yfinance as yf
 import pandas_market_calendars as mcal
 import pandas_ta as ta
 
+# load envs from .env
+load_dotenv()
+
 MIN_VOLUME = 1000000
 MAX_RSI = 60
 MIN_IV = 30
 MAX_IV = 70
-TRADING_DAYS_USED = 200
 TRADING_DAYS_PER_YEAR = 252
+DAYS_IN_PAST_FOR_PROCESSING = 800
+DAYS_TO_UPDATE_IN_DATABASE = 10
 
 # must match filename in symbols folder
 INDEX_LIST = ['dow', 'nasdaq100', 'sp500']
 
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-def get_symbols_from_csv(indices: list[str] | None):
+# init logger
+logger = logging.getLogger('indicators.py')
+
+
+def verify_environment_variables_are_set() -> None:
+    if DATABASE_URL is None:
+        logger.error('DATABASE_URL missing! Exiting...')
+        sys.exit(1)
+
+
+def get_symbols_from_csv(indices: list[str] | None) -> list[str]:
     '''returns list of symbols from csv.
     '''
     if (indices is None):
@@ -31,8 +50,7 @@ def get_symbols_from_csv(indices: list[str] | None):
     symbols = []
 
     for index in indices:
-        path_in_str = f'symbols/{index}.csv'
-
+        path_in_str = os.path.join('symbols', f'{index}.csv')
         with open(path_in_str, 'r', encoding='UTF-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
@@ -41,27 +59,26 @@ def get_symbols_from_csv(indices: list[str] | None):
 
     # use set to remove duplicates
     unique_symbols = set(symbols)
-    print(
-        f'Read {len(unique_symbols)} symbols from .csv files from {', '.join(indices)}')
+    logger.info(
+        'Read %d symbols from .csv files from %s', len(unique_symbols), ', '.join(indices))
     return list(unique_symbols)
 
 
 def analyze_symbols_multi_process(symbols: list[str], start_timestamp: int, end_timestamp: int) -> list[str]:
-    winning_stocks = []
+    analyzed_stocks = []
     with concurrent.futures.ProcessPoolExecutor() as executor:
         futures = [
-            executor.submit(return_symbol_df_if_is_winner, symbol,
+            executor.submit(return_analyzed_symbol_df, symbol,
                             start_timestamp, end_timestamp)
             for symbol in symbols
         ]
         for f in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
             symbol_df = f.result()
-            if symbol_df is not None:
-                winning_stocks.append(symbol_df)
-    return winning_stocks
+            analyzed_stocks.append(symbol_df)
+    return analyzed_stocks
 
 
-def return_symbol_df_if_is_winner(symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame:
+def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame:
     try:
         symbol_df = get_ticker_data_yahoo(
             symbol, start_timestamp, end_timestamp)
@@ -70,20 +87,19 @@ def return_symbol_df_if_is_winner(symbol: str, start_timestamp: int, end_timesta
         symbol_df = add_macd_data(symbol_df)
         symbol_df = add_rsi_data(symbol_df)
         symbol_df = add_implied_volatility(symbol_df)
-        # print(symbol_df)
-        # todo: bid/ask spread
+        # logger.debug(symbol_df)
+        # todo: bid/ask spread (option related -> without tradier api not possible here)
         # todo: add bollinger
 
         # additional indicators
         symbol_df = add_williams_percent_r(symbol_df)
 
-        # print(f'Analyzing {symbol}...')
-        is_symbol_legit = analyze_technicals(symbol_df)
-        return symbol_df if is_symbol_legit else None
+        # loger.debug(f'Analyzing {symbol}...')
+        return symbol_df
 
     except Exception as e:
         pass
-        # print(f'Error analyzing symbol: {symbol}; {str(e)}')
+        # logger.error(f'Error analyzing symbol: {symbol}; {str(e)}')
 
 
 def get_ticker_data_yahoo(symbol, start_timestamp, end_timestamp):
@@ -174,7 +190,7 @@ def add_williams_percent_r(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
-def analyze_technicals(dataframe: pd.DataFrame) -> bool:
+def is_winner_symbol(dataframe: pd.DataFrame) -> bool:
     latest_technicals = dataframe.loc[dataframe.index[-1]]
     second_latest_technicals = dataframe.loc[dataframe.index[-2]]
     close = latest_technicals['Close']
@@ -204,7 +220,7 @@ def get_trading_time_range_timestamps() -> tuple[int, int]:
     # get latest 200 trading days
     today = datetime.now(tz).date()
     schedule = nyse.schedule(
-        start_date=today - timedelta(days=TRADING_DAYS_USED), end_date=today)
+        start_date=today - timedelta(days=DAYS_IN_PAST_FOR_PROCESSING), end_date=today)
     trading_days = schedule.index.date
 
     # get earliest and latest possible dates
@@ -222,33 +238,35 @@ def get_trading_time_range_timestamps() -> tuple[int, int]:
     return start_ts, end_ts
 
 
+def filter_symbol_dfs_for_winners(df_list: list[pd.DataFrame]) -> list[pd.DataFrame]:
+    winning_symbols = []
+    for symbol_df in df_list:
+        try:
+            if is_winner_symbol(symbol_df):
+                winning_symbols.append(symbol_df)
+        except:
+            pass  # todo
+    return winning_symbols
+
+
 def get_symbol_names_as_list_from_winning_dfs(df_list: list[pd.DataFrame]) -> list[str]:
     return [symbol_df['Ticker'].iloc[0] for symbol_df in df_list]
 
 
-def insert_winners_into_database(dfs: list[str]) -> None:
+def insert_symbols_data_into_database(dfs: list[str]) -> None:
     try:
-        # todo: save secrets into .env
-        connection = psycopg2.connect(
-            host="ep-autumn-firefly-agz3pn7d-pooler.c-2.eu-central-1.aws.neon.tech",
-            port="5432",
-            dbname="neondb",
-            user="neondb_owner",
-            password="npg_hkUqD2typ1Zr"
-        )
+        connection = psycopg2.connect(DATABASE_URL)
         for df in dfs:
-            insert_winner_into_database(df, connection)
+            bulk_insert_symbol_data(df, connection)
     except Exception as e:
-        print(f'Error inserting winning stock: {str(e)}')
+        logger.error('Error inserting stock: %s', str(e))
     finally:
         connection.close()
 
 
-def insert_winner_into_database(df, connection):
-    '''Insert the latest row from a winner DataFrame into PostgreSQL.'''
+def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
+    """Bulk-insert all rows of a winner DataFrame into PostgreSQL."""
 
-    # insert latest row into database
-    latest = df.iloc[-1]
     query = """
         INSERT INTO stock_winners (
             ticker, date, close, high, low, open, volume,
@@ -273,56 +291,90 @@ def insert_winner_into_database(df, connection):
             inserted_at = NOW();
     """
 
-    values = [(
-        latest['Ticker'],
-        latest['Date'],
-        float(latest['Close']),
-        float(latest['High']),
-        float(latest['Low']),
-        float(latest['Open']),
-        int(latest['Volume']),
-        float(latest['EMA20']),
-        float(latest['EMA50']),
-        float(latest['MACD Line']),
-        float(latest['Signal Line']),
-        float(latest['RSI']),
-        float(latest['IV']),
-        float(latest['WILLR'])
-    )]
+    # convert entire DataFrame to list of tuples for bulk inserting
+    values = []
+    for _, row in df.tail(DAYS_TO_UPDATE_IN_DATABASE).iterrows():
+        values.append((
+            row["Ticker"],
+            row["Date"],
+            to_float(row["Close"]),
+            to_float(row["High"]),
+            to_float(row["Low"]),
+            to_float(row["Open"]),
+            int(row["Volume"]) if row["Volume"] is not None else None,
+            to_float(row["EMA20"]),
+            to_float(row["EMA50"]),
+            to_float(row["MACD Line"]),
+            to_float(row["Signal Line"]),
+            to_float(row["RSI"]),
+            to_float(row["IV"]),
+            to_float(row["WILLR"])
+        ))
 
     with connection.cursor() as cur:
         execute_values(cur, query, values)
         connection.commit()
-        print(f"Inserted/updated latest row for {latest['Ticker']}")
+
+
+def to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def setup_logger():
+    os.makedirs('logs', exist_ok=True)
+    date_str = datetime.now().strftime("%d-%m-%Y")
+    logging.basicConfig(
+        filename=f'logs/{date_str}.log', level=logging.INFO)
+
+    # set console handler too
+    # console = logging.StreamHandler()
+    # console.setLevel(logging.INFO)
+    # formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    # console.setFormatter(formatter)
+    # logger.addHandler(console)
 
 
 if __name__ == '__main__':
-    print('Processing symbols and check for indicator matches...')
+    verify_environment_variables_are_set()
+    setup_logger()
+
+    logger.info('\nStarting indicator script...')
+    logger.info(datetime.now().strftime("%d/%m/%Y, %H:%M:%S"))
+    logger.info('Processing symbols and check for indicator matches...')
     symbols_from_csv = get_symbols_from_csv(INDEX_LIST)
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
 
     # debug statement for testing out winning stocks
     # symbol_df = return_symbol_df_if_is_winner(
     #     'QCOM', start_timestamp, end_timestamp)
-    # print(symbol_df)
+    # logger.debug(symbol_df)
 
-    start = datetime.now()
-    winning_stock_dfs = analyze_symbols_multi_process(
+    start_analyzing = datetime.now()
+    stock_dfs = analyze_symbols_multi_process(
         symbols_from_csv, start_timestamp, end_timestamp)
-    duration_in_seconds = (datetime.now() - start).total_seconds()
+    analyzing_duration_in_seconds = (
+        datetime.now() - start_analyzing).total_seconds()
 
-    winning_symbols = get_symbol_names_as_list_from_winning_dfs(
-        winning_stock_dfs)
+    # todo: dont overwrite on conflict maybe
+    start_inserting = datetime.now()
+    insert_symbols_data_into_database(stock_dfs)
+    inserting_duration_in_seconds = (
+        datetime.now() - start_analyzing).total_seconds()
 
-    # todo: insert all last 200 days for each stock
-    insert_winners_into_database(winning_stock_dfs)
+    winning_symbols = filter_symbol_dfs_for_winners(stock_dfs)
+    winning_symbols_str = get_symbol_names_as_list_from_winning_dfs(
+        winning_symbols)
 
-    print(f'Processing took {duration_in_seconds} seconds')
-    print('Criteria:')
-    print(f'- Min. Volume: {MIN_VOLUME}')
-    print(f'- Max. RSI: {MAX_RSI}')
-    print(f'- IV between {MIN_IV} and {MAX_IV}')
-    print('- MACD increasing')
-    print('- Close > EVA 20 > EVA 50')
-    print(f'{len(winning_stock_dfs)} stocks fulfilling criteria!')
-    print(winning_symbols)
+    logger.info('Processing took %s seconds', analyzing_duration_in_seconds)
+    logger.info('Inserting took %s seconds', inserting_duration_in_seconds)
+    logger.info('Criteria:')
+    logger.info('- Min. Volume: %s', MIN_VOLUME)
+    logger.info('- Max. RSI: %s', MAX_RSI)
+    logger.info('- IV between %s and %s', MIN_IV, MAX_IV)
+    logger.info('- MACD increasing')
+    logger.info('- Close > EVA 20 > EVA 50')
+    logger.info('%d stocks fulfilling criteria!', len(winning_symbols))
+    logger.info('%s', winning_symbols_str)
