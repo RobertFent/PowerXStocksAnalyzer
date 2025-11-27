@@ -94,6 +94,7 @@ def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: 
 
         # additional indicators
         symbol_df = add_williams_percent_r(symbol_df)
+        symbol_df = add_stochastic_slow(symbol_df)
 
         # loger.debug(f'Analyzing {symbol}...')
         return symbol_df
@@ -190,6 +191,26 @@ def add_williams_percent_r(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
+def add_stochastic_slow(dataframe: pd.DataFrame) -> pd.DataFrame:
+    '''adds stochastic slow(14, 3, 3) values.
+        if %K crosses above %D -> buy signal
+        if %K crosses below %D -> sell signal
+    '''
+    low14 = dataframe['Low'].rolling(14).min()
+    high14 = dataframe['High'].rolling(14).max()
+
+    fast_k = (dataframe['Close'] - low14) / (high14 - low14) * 100
+    fast_k = fast_k.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    fast_d = fast_k.rolling(3).mean()
+
+    modified_df = dataframe.copy()
+    modified_df['%K'] = fast_d
+    modified_df['%D'] = modified_df['%K'].rolling(3).mean()
+
+    return modified_df
+
+
 def is_winner_symbol(dataframe: pd.DataFrame) -> bool:
     latest_technicals = dataframe.loc[dataframe.index[-1]]
     second_latest_technicals = dataframe.loc[dataframe.index[-2]]
@@ -271,7 +292,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
         INSERT INTO stock_winners (
             ticker, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi,
-            iv, willr
+            iv, willr, stoch_percent_k, stoch_percent_d
         )
         VALUES %s
         ON CONFLICT (ticker, date)
@@ -288,7 +309,9 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             rsi = EXCLUDED.rsi,
             iv = EXCLUDED.iv,
             willr = EXCLUDED.willr,
-            inserted_at = NOW();
+            stoch_percent_k = EXCLUDED.stoch_percent_k,
+            stoch_percent_d = EXCLUDED.stoch_percent_d,
+            last_updated_at = NOW();
     """
 
     # convert entire DataFrame to list of tuples for bulk inserting
@@ -308,7 +331,9 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             to_float(row["Signal Line"]),
             to_float(row["RSI"]),
             to_float(row["IV"]),
-            to_float(row["WILLR"])
+            to_float(row["WILLR"]),
+            to_float(row["%K"]),
+            to_float(row["%D"])
         ))
 
     with connection.cursor() as cur:
@@ -348,7 +373,7 @@ if __name__ == '__main__':
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
 
     # debug statement for testing out winning stocks
-    # symbol_df = return_symbol_df_if_is_winner(
+    # symbol_df = return_analyzed_symbol_df(
     #     'QCOM', start_timestamp, end_timestamp)
     # logger.debug(symbol_df)
 
@@ -358,11 +383,10 @@ if __name__ == '__main__':
     analyzing_duration_in_seconds = (
         datetime.now() - start_analyzing).total_seconds()
 
-    # todo: dont overwrite on conflict maybe
     start_inserting = datetime.now()
     insert_symbols_data_into_database(stock_dfs)
     inserting_duration_in_seconds = (
-        datetime.now() - start_analyzing).total_seconds()
+        datetime.now() - start_inserting).total_seconds()
 
     winning_symbols = filter_symbol_dfs_for_winners(stock_dfs)
     winning_symbols_str = get_symbol_names_as_list_from_winning_dfs(
