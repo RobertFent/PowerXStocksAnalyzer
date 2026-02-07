@@ -2,3 +2,4 @@
 __pycache__
 output/**
 logs
+combined_stock_data.*

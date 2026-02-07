@@ -52,3 +52,11 @@ pip install -r requirements.txt
 ```sh
 python3 powerx.py
 ```
+
+## Indicator XGBoost
+```sh
+brew install libomp
+```
+```sh
+python3 indicator_tuning.py
+```

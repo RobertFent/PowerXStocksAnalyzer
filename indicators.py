@@ -30,7 +30,7 @@ DAYS_TO_UPDATE_IN_DATABASE = 7  # change this to increase the db insert window
 # must match filename in symbols folder
 INDEX_LIST = ['dow', 'nasdaq100', 'sp500']
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 # init logger
 logger = logging.getLogger('indicators.py')
@@ -65,7 +65,7 @@ def get_symbols_from_csv(indices: list[str] | None) -> list[str]:
     return list(unique_symbols)
 
 
-def analyze_symbols_multi_process(symbols: list[str], start_timestamp: int, end_timestamp: int) -> list[str]:
+def analyze_symbols_multi_process(symbols: list[str], start_timestamp: int, end_timestamp: int) -> list[pd.DataFrame]:
     analyzed_stocks = []
     with concurrent.futures.ProcessPoolExecutor() as executor:
         futures = [
@@ -79,14 +79,15 @@ def analyze_symbols_multi_process(symbols: list[str], start_timestamp: int, end_
     return analyzed_stocks
 
 
-def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame:
+def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame | None:
     try:
         symbol_df = get_ticker_data_yahoo(
             symbol, start_timestamp, end_timestamp)
 
         symbol_df = add_ema_data(symbol_df)
         symbol_df = add_macd_data(symbol_df)
-        symbol_df = add_rsi_data(symbol_df)
+        symbol_df = add_rsi_14_data(symbol_df)
+        symbol_df = add_rsi_4_data(symbol_df)
         symbol_df = add_implied_volatility(symbol_df)
         # logger.debug(symbol_df)
         # todo: bid/ask spread (option related -> without tradier api not possible here)
@@ -100,7 +101,7 @@ def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: 
         return symbol_df
 
     except Exception as e:
-        pass
+        return None
         # logger.error(f'Error analyzing symbol: {symbol}; {str(e)}')
 
 
@@ -150,13 +151,24 @@ def add_macd_data(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
-def add_rsi_data(dataframe: pd.DataFrame) -> pd.DataFrame:
+def add_rsi_14_data(dataframe: pd.DataFrame) -> pd.DataFrame:
     '''adds rsi(14) values.
     '''
     rsi = ta.rsi(dataframe['Close'], length=14)
 
     modified_df = dataframe.copy()
-    modified_df['RSI'] = rsi
+    modified_df['RSI_14'] = rsi
+
+    return modified_df
+
+
+def add_rsi_4_data(dataframe: pd.DataFrame) -> pd.DataFrame:
+    '''adds rsi(4) values.
+    '''
+    rsi = ta.rsi(dataframe['Close'], length=4)
+
+    modified_df = dataframe.copy()
+    modified_df['RSI_4'] = rsi
 
     return modified_df
 
@@ -274,7 +286,7 @@ def get_symbol_names_as_list_from_winning_dfs(df_list: list[pd.DataFrame]) -> li
     return [symbol_df['Ticker'].iloc[0] for symbol_df in df_list]
 
 
-def insert_symbols_data_into_database(dfs: list[str]) -> None:
+def insert_symbols_data_into_database(dfs: list[pd.DataFrame]) -> None:
     try:
         connection = psycopg2.connect(DATABASE_URL)
         for df in dfs:
@@ -286,12 +298,12 @@ def insert_symbols_data_into_database(dfs: list[str]) -> None:
 
 
 def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
-    """Bulk-insert all rows of a winner DataFrame into PostgreSQL."""
+    '''Bulk-insert all rows of a winner DataFrame into PostgreSQL.'''
 
-    query = """
+    query = '''
         INSERT INTO stock_winners (
             ticker, date, close, high, low, open, volume,
-            ema20, ema50, macd_line, signal_line, rsi,
+            ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
             iv, willr, stoch_percent_k, stoch_percent_d
         )
         VALUES %s
@@ -306,34 +318,36 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             ema50 = EXCLUDED.ema50,
             macd_line = EXCLUDED.macd_line,
             signal_line = EXCLUDED.signal_line,
-            rsi = EXCLUDED.rsi,
+            rsi_14 = EXCLUDED.rsi_14,
+            rsi_4 = EXCLUDED.rsi_4,
             iv = EXCLUDED.iv,
             willr = EXCLUDED.willr,
             stoch_percent_k = EXCLUDED.stoch_percent_k,
             stoch_percent_d = EXCLUDED.stoch_percent_d,
             last_updated_at = NOW();
-    """
+    '''
 
     # convert entire DataFrame to list of tuples for bulk inserting
     values = []
     for _, row in df.tail(DAYS_TO_UPDATE_IN_DATABASE).iterrows():
         values.append((
-            row["Ticker"],
-            row["Date"],
-            to_float(row["Close"]),
-            to_float(row["High"]),
-            to_float(row["Low"]),
-            to_float(row["Open"]),
-            int(row["Volume"]) if row["Volume"] is not None else None,
-            to_float(row["EMA20"]),
-            to_float(row["EMA50"]),
-            to_float(row["MACD Line"]),
-            to_float(row["Signal Line"]),
-            to_float(row["RSI"]),
-            to_float(row["IV"]),
-            to_float(row["WILLR"]),
-            to_float(row["%K"]),
-            to_float(row["%D"])
+            row['Ticker'],
+            row['Date'],
+            to_float(row['Close']),
+            to_float(row['High']),
+            to_float(row['Low']),
+            to_float(row['Open']),
+            int(row['Volume']) if row['Volume'] is not None else None,
+            to_float(row['EMA20']),
+            to_float(row['EMA50']),
+            to_float(row['MACD Line']),
+            to_float(row['Signal Line']),
+            to_float(row['RSI_14']),
+            to_float(row['RSI_4']),
+            to_float(row['IV']),
+            to_float(row['WILLR']),
+            to_float(row['%K']),
+            to_float(row['%D'])
         ))
 
     with connection.cursor() as cur:
@@ -350,7 +364,7 @@ def to_float(value):
 
 def setup_logger():
     os.makedirs('logs', exist_ok=True)
-    date_str = datetime.now().strftime("%d-%m-%Y")
+    date_str = datetime.now().strftime('%d-%m-%Y')
     logging.basicConfig(
         filename=f'logs/{date_str}.log', level=logging.INFO)
 
@@ -362,12 +376,19 @@ def setup_logger():
     # logger.addHandler(console)
 
 
+def save_dfs_to_excel(stock_dfs: list[pd.DataFrame]) -> None:
+    combined_df = pd.concat(stock_dfs, ignore_index=True)
+    combined_df.to_excel('combined_stock_data.xlsx',
+                         engine='openpyxl', index=False)
+    combined_df.to_csv('combined_stock_data.csv', index=False)
+
+
 if __name__ == '__main__':
     verify_environment_variables_are_set()
     setup_logger()
 
     logger.info('\nStarting indicator script...')
-    logger.info(datetime.now().strftime("%d/%m/%Y, %H:%M:%S"))
+    logger.info(datetime.now().strftime('%d/%m/%Y, %H:%M:%S'))
     logger.info('Processing symbols and check for indicator matches...')
     symbols_from_csv = get_symbols_from_csv(INDEX_LIST)
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
@@ -385,20 +406,23 @@ if __name__ == '__main__':
 
     start_inserting = datetime.now()
     insert_symbols_data_into_database(stock_dfs)
+    # save_dfs_to_excel(stock_dfs)
+
     inserting_duration_in_seconds = (
         datetime.now() - start_inserting).total_seconds()
 
-    winning_symbols = filter_symbol_dfs_for_winners(stock_dfs)
-    winning_symbols_str = get_symbol_names_as_list_from_winning_dfs(
-        winning_symbols)
+    # winning_symbols = filter_symbol_dfs_for_winners(stock_dfs)
+    # winning_symbols_str = get_symbol_names_as_list_from_winning_dfs(
+    #     winning_symbols)
 
     logger.info('Processing took %s seconds', analyzing_duration_in_seconds)
-    logger.info('Inserting took %s seconds', inserting_duration_in_seconds)
-    logger.info('Criteria:')
-    logger.info('- Min. Volume: %s', MIN_VOLUME)
-    logger.info('- Max. RSI: %s', MAX_RSI)
-    logger.info('- IV between %s and %s', MIN_IV, MAX_IV)
-    logger.info('- MACD increasing')
-    logger.info('- Close > EVA 20 > EVA 50')
-    logger.info('%d stocks fulfilling criteria!', len(winning_symbols))
-    logger.info('%s', winning_symbols_str)
+    logger.info('Inserting / saving took %s seconds',
+                inserting_duration_in_seconds)
+    # logger.info('Criteria:')
+    # logger.info('- Min. Volume: %s', MIN_VOLUME)
+    # logger.info('- Max. RSI: %s', MAX_RSI)
+    # logger.info('- IV between %s and %s', MIN_IV, MAX_IV)
+    # logger.info('- MACD increasing')
+    # logger.info('- Close > EVA 20 > EVA 50')
+    # logger.info('%d stocks fulfilling criteria!', len(winning_symbols))
+    # logger.info('%s', winning_symbols_str)
