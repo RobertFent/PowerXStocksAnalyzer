@@ -94,7 +94,8 @@ def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: 
         # todo: add bollinger
 
         # additional indicators
-        symbol_df = add_williams_percent_r(symbol_df)
+        symbol_df = add_williams_percent_r_4(symbol_df)
+        symbol_df = add_williams_percent_r_14(symbol_df)
         symbol_df = add_stochastic_slow(symbol_df)
 
         # loger.debug(f'Analyzing {symbol}...')
@@ -191,14 +192,26 @@ def add_implied_volatility(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
-def add_williams_percent_r(dataframe: pd.DataFrame) -> pd.DataFrame:
+def add_williams_percent_r_4(dataframe: pd.DataFrame) -> pd.DataFrame:
+    '''adds William %R values; length = 4
+    '''
+    willr = ta.willr(
+        dataframe['High'], dataframe['Low'], dataframe['Close'], length=4)
+
+    modified_df = dataframe.copy()
+    modified_df['WILLR_4'] = willr
+
+    return modified_df
+
+
+def add_williams_percent_r_14(dataframe: pd.DataFrame) -> pd.DataFrame:
     '''adds William %R values; length = 14
     '''
     willr = ta.willr(
         dataframe['High'], dataframe['Low'], dataframe['Close'], length=14)
 
     modified_df = dataframe.copy()
-    modified_df['WILLR'] = willr
+    modified_df['WILLR_14'] = willr
 
     return modified_df
 
@@ -301,10 +314,10 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
     '''Bulk-insert all rows of a winner DataFrame into PostgreSQL.'''
 
     query = '''
-        INSERT INTO stock_winners (
+        INSERT INTO stock_data (
             ticker, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
-            iv, willr, stoch_percent_k, stoch_percent_d
+            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d
         )
         VALUES %s
         ON CONFLICT (ticker, date)
@@ -321,7 +334,8 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             rsi_14 = EXCLUDED.rsi_14,
             rsi_4 = EXCLUDED.rsi_4,
             iv = EXCLUDED.iv,
-            willr = EXCLUDED.willr,
+            willr_4 = EXCLUDED.willr_4,
+            willr_14 = EXCLUDED.willr_14,
             stoch_percent_k = EXCLUDED.stoch_percent_k,
             stoch_percent_d = EXCLUDED.stoch_percent_d,
             last_updated_at = NOW();
@@ -345,7 +359,8 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             to_float(row['RSI_14']),
             to_float(row['RSI_4']),
             to_float(row['IV']),
-            to_float(row['WILLR']),
+            to_float(row['WILLR_4']),
+            to_float(row['WILLR_14']),
             to_float(row['%K']),
             to_float(row['%D'])
         ))

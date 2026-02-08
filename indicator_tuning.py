@@ -3,14 +3,13 @@ from sklearn.metrics import classification_report
 from xgboost import XGBClassifier
 
 df = pd.read_csv('combined_stock_data.csv')
-# todo: drop cols with NaN; Adjusted close vs close
 # print(df.loc[0])
 
 # If I buy at close today → will price rise ≥2% in 5 days?
 df['future_max_5d'] = (
     df.groupby('Ticker')['High']
     .shift(-1)
-    .rolling(10)
+    .rolling(5)
     .max()
 )
 df['target'] = ((df['future_max_5d'] / df['Close'] - 1) > 0.02).astype(int)
@@ -19,7 +18,7 @@ df = df.dropna()
 # feature matrix
 features = [
     'EMA20', 'EMA50', 'MACD Line', 'Signal Line', 'RSI_14', 'RSI_4',
-    'IV', 'WILLR', '%K', '%D', 'Volume', 'Open', 'High', 'Low', 'Close'
+    'IV', 'WILLR_4', 'WILLR_14', '%K', '%D', 'Volume', 'Open', 'High', 'Low', 'Close'
 ]
 X = df[features]
 y = df['target']
@@ -61,31 +60,32 @@ print('Win rate:', trades['target'].mean())
 imp = pd.Series(model.feature_importances_, index=features)
 print(imp.sort_values(ascending=False))
 
-# RSI(4) + WillR + IV is the real signal
+# WILLR(4) + RSI(4) + IV is the real signal
 
 #               precision    recall  f1-score   support
 
-#            0       0.80      0.80      0.80     87547
-#            1       0.90      0.91      0.90    181187
+#            0       0.81      0.85      0.83    121963
+#            1       0.87      0.83      0.85    146735
 
-#     accuracy                           0.87    268734
-#    macro avg       0.85      0.85      0.85    268734
-# weighted avg       0.87      0.87      0.87    268734
+#     accuracy                           0.84    268698
+#    macro avg       0.84      0.84      0.84    268698
+# weighted avg       0.84      0.84      0.84    268698
 
-# Number of trades: 161344
-# Win rate: 0.9434996033320111
-# RSI_4          0.510936
-# WILLR          0.198841
-# IV             0.117079
-# %D             0.033955
-# RSI_14         0.021758
-# %K             0.019250
-# MACD Line      0.014822
-# Signal Line    0.014178
-# Volume         0.012426
-# High           0.010577
-# Low            0.010240
-# EMA50          0.009497
-# EMA20          0.009323
-# Close          0.009095
-# Open           0.008022
+# Number of trades: 118978
+# Win rate: 0.9262384642538957
+# WILLR_4        0.373412
+# RSI_4          0.226372
+# IV             0.184858
+# WILLR_14       0.062423
+# %D             0.031194
+# %K             0.019694
+# RSI_14         0.015891
+# Volume         0.015313
+# High           0.011454
+# Signal Line    0.011139
+# MACD Line      0.010624
+# Low            0.009981
+# Close          0.007748
+# EMA50          0.007543
+# EMA20          0.006370
+# Open           0.005984
