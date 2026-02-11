@@ -18,10 +18,6 @@ import pandas_ta as ta
 # load envs from .env
 load_dotenv()
 
-MIN_VOLUME = 1000000
-MAX_RSI = 60
-MIN_IV = 30
-MAX_IV = 70
 TRADING_DAYS_PER_YEAR = 252
 # change this to 250 more than days to update in db for more accurate results
 DAYS_IN_PAST_FOR_PROCESSING = 300
@@ -43,8 +39,8 @@ def verify_environment_variables_are_set() -> None:
 
 
 def get_symbols_from_csv(indices: list[str] | None) -> list[str]:
-    '''returns list of symbols from csv.
-    '''
+    """returns list of symbols from csv.
+    """
     if (indices is None):
         indices = ['dow', 'nasdaq100', 'nyse', 'sp500']
 
@@ -97,6 +93,7 @@ def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: 
         symbol_df = add_williams_percent_r_4(symbol_df)
         symbol_df = add_williams_percent_r_14(symbol_df)
         symbol_df = add_stochastic_slow(symbol_df)
+        symbol_df = add_adr_20(symbol_df)
 
         # loger.debug(f'Analyzing {symbol}...')
         return symbol_df
@@ -124,8 +121,8 @@ def get_ticker_data_yahoo(symbol, start_timestamp, end_timestamp):
 
 
 def add_ema_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds EMA20 and EMA50 values
-    '''
+    """adds EMA20 and EMA50 values
+    """
     ema_20 = dataframe['Close'].ewm(span=20, adjust=False).mean()
     ema_50 = dataframe['Close'].ewm(span=50, adjust=False).mean()
 
@@ -137,8 +134,8 @@ def add_ema_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_macd_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds macd(26, 12, 9) values.
-    '''
+    """adds macd(26, 12, 9) values.
+    """
     ema_12 = dataframe['Close'].ewm(span=12, adjust=False).mean()
     ema_26 = dataframe['Close'].ewm(span=26, adjust=False).mean()
 
@@ -153,8 +150,8 @@ def add_macd_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_rsi_14_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds rsi(14) values.
-    '''
+    """adds rsi(14) values.
+    """
     rsi = ta.rsi(dataframe['Close'], length=14)
 
     modified_df = dataframe.copy()
@@ -164,8 +161,8 @@ def add_rsi_14_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_rsi_4_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds rsi(4) values.
-    '''
+    """adds rsi(4) values.
+    """
     rsi = ta.rsi(dataframe['Close'], length=4)
 
     modified_df = dataframe.copy()
@@ -175,8 +172,8 @@ def add_rsi_4_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_implied_volatility(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds IV(30) values.
-    '''
+    """adds IV(30) values.
+    """
     modified_df = dataframe.copy()
 
     # daily log returns
@@ -193,8 +190,8 @@ def add_implied_volatility(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_williams_percent_r_4(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds William %R values; length = 4
-    '''
+    """adds William %R values; length = 4
+    """
     willr = ta.willr(
         dataframe['High'], dataframe['Low'], dataframe['Close'], length=4)
 
@@ -205,8 +202,8 @@ def add_williams_percent_r_4(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_williams_percent_r_14(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds William %R values; length = 14
-    '''
+    """adds William %R values; length = 14
+    """
     willr = ta.willr(
         dataframe['High'], dataframe['Low'], dataframe['Close'], length=14)
 
@@ -217,10 +214,10 @@ def add_williams_percent_r_14(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_stochastic_slow(dataframe: pd.DataFrame) -> pd.DataFrame:
-    '''adds stochastic slow(14, 3, 3) values.
+    """adds stochastic slow(14, 3, 3) values.
         if %K crosses above %D -> buy signal
         if %K crosses below %D -> sell signal
-    '''
+    """
     low14 = dataframe['Low'].rolling(14).min()
     high14 = dataframe['High'].rolling(14).max()
 
@@ -236,27 +233,14 @@ def add_stochastic_slow(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
-def is_winner_symbol(dataframe: pd.DataFrame) -> bool:
-    latest_technicals = dataframe.loc[dataframe.index[-1]]
-    second_latest_technicals = dataframe.loc[dataframe.index[-2]]
-    close = latest_technicals['Close']
-    ema20 = latest_technicals['EMA20']
-    ema50 = latest_technicals['EMA50']
-    rsi = latest_technicals['RSI']
-    iv = latest_technicals['IV']
-    volume = latest_technicals['Volume']
-    macd_line = latest_technicals['MACD Line']
-    macd_line_prev = second_latest_technicals['MACD Line']
-
-    is_volume_bigger_than_mio = volume > MIN_VOLUME
-    is_close_higher_than_ema20_than_ema50 = close > ema20 > ema50
-    # todo: signal line
-    is_macd_increasing = macd_line > macd_line_prev
-    is_rsi_smaller_60 = rsi < MAX_RSI
-    is_iv_between_30_and_70 = MIN_IV < iv < MAX_IV
-
-    are_technicals_legit = is_volume_bigger_than_mio and is_close_higher_than_ema20_than_ema50 and is_macd_increasing and is_rsi_smaller_60 and is_iv_between_30_and_70
-    return bool(are_technicals_legit)
+def add_adr_20(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """adds ADR_20 (Average Daily Range over 20 days).
+        ADR_20 = rolling mean of (High - Low) over 20 days.
+    """
+    adr20 = (dataframe['High'] - dataframe['Low']).rolling(window=20).mean()
+    modified_df = dataframe.copy()
+    modified_df['ADR_20'] = adr20
+    return modified_df
 
 
 def get_trading_time_range_timestamps() -> tuple[int, int]:
@@ -284,21 +268,6 @@ def get_trading_time_range_timestamps() -> tuple[int, int]:
     return start_ts, end_ts
 
 
-def filter_symbol_dfs_for_winners(df_list: list[pd.DataFrame]) -> list[pd.DataFrame]:
-    winning_symbols = []
-    for symbol_df in df_list:
-        try:
-            if is_winner_symbol(symbol_df):
-                winning_symbols.append(symbol_df)
-        except:
-            pass  # todo
-    return winning_symbols
-
-
-def get_symbol_names_as_list_from_winning_dfs(df_list: list[pd.DataFrame]) -> list[str]:
-    return [symbol_df['Ticker'].iloc[0] for symbol_df in df_list]
-
-
 def insert_symbols_data_into_database(dfs: list[pd.DataFrame]) -> None:
     try:
         connection = psycopg2.connect(DATABASE_URL)
@@ -311,13 +280,13 @@ def insert_symbols_data_into_database(dfs: list[pd.DataFrame]) -> None:
 
 
 def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
-    '''Bulk-insert all rows of a winner DataFrame into PostgreSQL.'''
+    """Bulk-insert all rows of a winner DataFrame into PostgreSQL."""
 
-    query = '''
+    query = """
         INSERT INTO stock_data (
             ticker, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
-            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d
+            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_20
         )
         VALUES %s
         ON CONFLICT (ticker, date)
@@ -338,8 +307,9 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             willr_14 = EXCLUDED.willr_14,
             stoch_percent_k = EXCLUDED.stoch_percent_k,
             stoch_percent_d = EXCLUDED.stoch_percent_d,
+            adr_20 = EXCLUDED.adr_20,
             last_updated_at = NOW();
-    '''
+    """
 
     # convert entire DataFrame to list of tuples for bulk inserting
     values = []
@@ -362,7 +332,8 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             to_float(row['WILLR_4']),
             to_float(row['WILLR_14']),
             to_float(row['%K']),
-            to_float(row['%D'])
+            to_float(row['%D']),
+            to_float(row['ADR_20'])
         ))
 
     with connection.cursor() as cur:
@@ -426,18 +397,6 @@ if __name__ == '__main__':
     inserting_duration_in_seconds = (
         datetime.now() - start_inserting).total_seconds()
 
-    # winning_symbols = filter_symbol_dfs_for_winners(stock_dfs)
-    # winning_symbols_str = get_symbol_names_as_list_from_winning_dfs(
-    #     winning_symbols)
-
     logger.info('Processing took %s seconds', analyzing_duration_in_seconds)
     logger.info('Inserting / saving took %s seconds',
                 inserting_duration_in_seconds)
-    # logger.info('Criteria:')
-    # logger.info('- Min. Volume: %s', MIN_VOLUME)
-    # logger.info('- Max. RSI: %s', MAX_RSI)
-    # logger.info('- IV between %s and %s', MIN_IV, MAX_IV)
-    # logger.info('- MACD increasing')
-    # logger.info('- Close > EVA 20 > EVA 50')
-    # logger.info('%d stocks fulfilling criteria!', len(winning_symbols))
-    # logger.info('%s', winning_symbols_str)
