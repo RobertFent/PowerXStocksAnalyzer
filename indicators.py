@@ -81,6 +81,7 @@ def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: 
             symbol, start_timestamp, end_timestamp)
 
         symbol_df = add_ema_data(symbol_df)
+        symbol_df = add_ma_200_data(symbol_df)
         symbol_df = add_macd_data(symbol_df)
         symbol_df = add_rsi_14_data(symbol_df)
         symbol_df = add_rsi_4_data(symbol_df)
@@ -133,9 +134,18 @@ def add_ema_data(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
+def add_ma_200_data(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """adds MA_200 values"""
+    ma_200 = dataframe['Close'].rolling(window=200).mean()
+
+    modified_df = dataframe.copy()
+    modified_df['MA_200'] = ma_200
+
+    return modified_df
+
+
 def add_macd_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds macd(26, 12, 9) values.
-    """
+    """adds macd(26, 12, 9) values."""
     ema_12 = dataframe['Close'].ewm(span=12, adjust=False).mean()
     ema_26 = dataframe['Close'].ewm(span=26, adjust=False).mean()
 
@@ -150,8 +160,7 @@ def add_macd_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_rsi_14_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds rsi(14) values.
-    """
+    """adds rsi(14) values."""
     rsi = ta.rsi(dataframe['Close'], length=14)
 
     modified_df = dataframe.copy()
@@ -161,8 +170,7 @@ def add_rsi_14_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_rsi_4_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds rsi(4) values.
-    """
+    """adds rsi(4) values."""
     rsi = ta.rsi(dataframe['Close'], length=4)
 
     modified_df = dataframe.copy()
@@ -172,8 +180,7 @@ def add_rsi_4_data(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_implied_volatility(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds IV(30) values.
-    """
+    """adds IV(30) values."""
     modified_df = dataframe.copy()
 
     # daily log returns
@@ -190,8 +197,7 @@ def add_implied_volatility(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_williams_percent_r_4(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds William %R values; length = 4
-    """
+    """adds William %R values; length = 4"""
     willr = ta.willr(
         dataframe['High'], dataframe['Low'], dataframe['Close'], length=4)
 
@@ -202,8 +208,7 @@ def add_williams_percent_r_4(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_williams_percent_r_14(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds William %R values; length = 14
-    """
+    """adds William %R values; length = 14"""
     willr = ta.willr(
         dataframe['High'], dataframe['Low'], dataframe['Close'], length=14)
 
@@ -254,8 +259,10 @@ def get_trading_time_range_timestamps() -> tuple[int, int]:
     trading_days = schedule.index.date
 
     # get earliest and latest possible dates
+    # last trading day is yesterday if today is Mon-Fri else its just the last trading timestamp
+    last_prev_trading_day_index = -2 if today.weekday() <= 4 else -1
     start_day = trading_days[0]  # 0-based index
-    end_day = trading_days[-2]     # yesterday’s trading day
+    end_day = trading_days[last_prev_trading_day_index]
 
     # Combine with NYSE open and close times
     start_dt = tz.localize(datetime.combine(start_day, time(9, 30)))
@@ -286,7 +293,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
         INSERT INTO stock_data (
             ticker, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
-            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_20
+            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_20, ma_200
         )
         VALUES %s
         ON CONFLICT (ticker, date)
@@ -308,6 +315,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             stoch_percent_k = EXCLUDED.stoch_percent_k,
             stoch_percent_d = EXCLUDED.stoch_percent_d,
             adr_20 = EXCLUDED.adr_20,
+            ma_200 = EXCLUDED.ma_200,
             last_updated_at = NOW();
     """
 
@@ -333,7 +341,8 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             to_float(row['WILLR_14']),
             to_float(row['%K']),
             to_float(row['%D']),
-            to_float(row['ADR_20'])
+            to_float(row['ADR_20']),
+            to_float(row['MA_200'])
         ))
 
     with connection.cursor() as cur:
@@ -380,9 +389,9 @@ if __name__ == '__main__':
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
 
     # debug statement for testing out winning stocks
-    # symbol_df = return_analyzed_symbol_df(
-    #     'QCOM', start_timestamp, end_timestamp)
-    # logger.debug(symbol_df)
+    symbol_df = return_analyzed_symbol_df(
+        'QCOM', start_timestamp, end_timestamp)
+    logger.debug(symbol_df)
 
     start_analyzing = datetime.now()
     stock_dfs = analyze_symbols_multi_process(

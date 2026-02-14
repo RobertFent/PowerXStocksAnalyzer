@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS stock_data (
     stoch_percent_k DOUBLE PRECISION,
     stoch_percent_d DOUBLE PRECISION,
     adr_20 NUMERIC(6,2),
+    ma_200 NUMERIC(6,2),
     last_updated_at TIMESTAMP DEFAULT NOW(),
 
     UNIQUE (ticker, date)
