@@ -10,6 +10,7 @@ from psycopg2.extras import execute_values
 import numpy as np
 import pandas as pd
 import pytz
+import requests
 from tqdm import tqdm
 import yfinance as yf
 import pandas_market_calendars as mcal
@@ -27,6 +28,8 @@ DAYS_TO_UPDATE_IN_DATABASE = 7  # change this to increase the db insert window
 INDEX_LIST = ['dow', 'nasdaq100', 'sp500']
 
 DATABASE_URL = os.getenv('DATABASE_URL')
+REVALIDATE_SECRET = os.getenv('REVALIDATE_SECRET')
+STOCK_SCREENER_REVALIDATE_URL = os.getenv('STOCK_SCREENER_REVALIDATE_URL')
 
 # init logger
 logger = logging.getLogger('indicators.py')
@@ -378,6 +381,13 @@ def save_dfs_to_excel(stock_dfs: list[pd.DataFrame]) -> None:
     combined_df.to_csv('combined_stock_data.csv', index=False)
 
 
+def revalidate_stock_screener_cache() -> None:
+    headers = {'x-revalidate-secret': REVALIDATE_SECRET}
+    response = requests.post(
+        STOCK_SCREENER_REVALIDATE_URL, headers=headers, timeout=5000)
+    logger.info('Stock Screener revalidation response: %s', response.json())
+
+
 if __name__ == '__main__':
     verify_environment_variables_are_set()
     setup_logger()
@@ -409,3 +419,6 @@ if __name__ == '__main__':
     logger.info('Processing took %s seconds', analyzing_duration_in_seconds)
     logger.info('Inserting / saving took %s seconds',
                 inserting_duration_in_seconds)
+
+    # send request to refresh cache after new data is inserted
+    revalidate_stock_screener_cache()
