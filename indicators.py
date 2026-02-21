@@ -97,7 +97,7 @@ def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: 
         symbol_df = add_williams_percent_r_4(symbol_df)
         symbol_df = add_williams_percent_r_14(symbol_df)
         symbol_df = add_stochastic_slow(symbol_df)
-        symbol_df = add_adr_20(symbol_df)
+        symbol_df = add_adr_14(symbol_df)
 
         # loger.debug(f'Analyzing {symbol}...')
         return symbol_df
@@ -241,13 +241,13 @@ def add_stochastic_slow(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
-def add_adr_20(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds ADR_20 (Average Daily Range over 20 days).
-        ADR_20 = rolling mean of (High - Low) over 20 days.
+def add_adr_14(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """adds ADR_14 (Average Daily Range over 14 days).
+        ADR_14 = rolling mean of (High - Low) over 14 days.
     """
-    adr20 = (dataframe['High'] - dataframe['Low']).rolling(window=20).mean()
+    adr14 = (dataframe['High'] - dataframe['Low']).rolling(window=14).mean()
     modified_df = dataframe.copy()
-    modified_df['ADR_20'] = adr20
+    modified_df['ADR_14'] = adr14
     return modified_df
 
 
@@ -296,7 +296,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
         INSERT INTO stock_data (
             ticker, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
-            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_20, ma_200
+            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_14, ma_200
         )
         VALUES %s
         ON CONFLICT (ticker, date)
@@ -317,7 +317,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             willr_14 = EXCLUDED.willr_14,
             stoch_percent_k = EXCLUDED.stoch_percent_k,
             stoch_percent_d = EXCLUDED.stoch_percent_d,
-            adr_20 = EXCLUDED.adr_20,
+            adr_14 = EXCLUDED.adr_14,
             ma_200 = EXCLUDED.ma_200,
             last_updated_at = NOW();
     """
@@ -344,7 +344,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             to_float(row['WILLR_14']),
             to_float(row['%K']),
             to_float(row['%D']),
-            to_float(row['ADR_20']),
+            to_float(row['ADR_14']),
             to_float(row['MA_200'])
         ))
 

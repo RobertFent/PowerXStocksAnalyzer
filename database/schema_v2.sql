@@ -18,9 +18,11 @@ CREATE TABLE IF NOT EXISTS stock_data (
     willr_14 DOUBLE PRECISION,
     stoch_percent_k DOUBLE PRECISION,
     stoch_percent_d DOUBLE PRECISION,
-    adr_20 NUMERIC(6,2),
+    adr_14 NUMERIC(6,2),
     ma_200 NUMERIC(6,2),
     last_updated_at TIMESTAMP DEFAULT NOW(),
 
     UNIQUE (ticker, date)
 );
+
+CREATE INDEX CONCURRENTLY idx_stock_data_ticker_date ON stock_data (ticker, date DESC);
