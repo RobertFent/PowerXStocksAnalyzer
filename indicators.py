@@ -25,11 +25,11 @@ DAYS_IN_PAST_FOR_PROCESSING = 300
 DAYS_TO_UPDATE_IN_DATABASE = 7  # change this to increase the db insert window
 
 # must match filename in symbols folder
-INDEX_LIST = ['dow', 'nasdaq100', 'sp500']
+INDEX_LIST = ['sp100', 'nasdaq100', 'sp500']
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 REVALIDATE_SECRET = os.getenv('REVALIDATE_SECRET')
-STOCK_SCREENER_REVALIDATE_URL = os.getenv('STOCK_SCREENER_REVALIDATE_URL')
+STOCK_SCREENER_REVALIDATE_URL = os.getenv('STOCK_SCREENER_REVALIDATE_URL', '')
 
 # init logger
 logger = logging.getLogger('indicators.py')
@@ -41,48 +41,48 @@ def verify_environment_variables_are_set() -> None:
         sys.exit(1)
 
 
-def get_symbols_from_csv(indices: list[str] | None) -> list[str]:
-    """returns list of symbols from csv.
-    """
-    if (indices is None):
-        indices = ['dow', 'nasdaq100', 'nyse', 'sp500']
+def get_symbols_from_csv(indices: list[str]) -> dict[str, list[str]]:
+    """returns dict where key is index and values are symbols listed there"""
 
-    symbols = []
+    symbols: dict[str, list[str]] = {}
 
     for index in indices:
+        symbols[index] = []
         path_in_str = os.path.join('symbols', f'{index}.csv')
         with open(path_in_str, 'r', encoding='UTF-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 symbol = row['Symbol']
-                symbols.append(symbol)
+                symbols[index].append(symbol)
 
-    # use set to remove duplicates
-    unique_symbols = set(symbols)
-    logger.info(
-        'Read %d symbols from .csv files from %s', len(unique_symbols), ', '.join(indices))
-    return list(unique_symbols)
+    return symbols
 
 
-def analyze_symbols_multi_process(symbols: list[str], start_timestamp: int, end_timestamp: int) -> list[pd.DataFrame]:
-    analyzed_stocks = []
+def analyze_symbols_multi_process(symbols: dict[str, list[str]], start_timestamp: int, end_timestamp: int) -> list[pd.DataFrame]:
+    analyzed_stocks: list[pd.DataFrame] = []
+
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        futures = [
-            executor.submit(return_analyzed_symbol_df, symbol,
-                            start_timestamp, end_timestamp)
-            for symbol in symbols
-        ]
+        futures = []
+        for index, listed_symbols in symbols.items():
+            futures.extend([
+                executor.submit(return_analyzed_symbol_df, index, symbol,
+                                start_timestamp, end_timestamp)
+                for symbol in listed_symbols
+            ])
         for f in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
             symbol_df = f.result()
-            analyzed_stocks.append(symbol_df)
+            if symbol_df is not None:
+                analyzed_stocks.append(symbol_df)
+
     return analyzed_stocks
 
 
-def return_analyzed_symbol_df(symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame | None:
+def return_analyzed_symbol_df(index: str, symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame | None:
     try:
         symbol_df = get_ticker_data_yahoo(
             symbol, start_timestamp, end_timestamp)
 
+        symbol_df = add_index_data(symbol_df, index)
         symbol_df = add_ema_data(symbol_df)
         symbol_df = add_ma_200_data(symbol_df)
         symbol_df = add_macd_data(symbol_df)
@@ -124,9 +124,16 @@ def get_ticker_data_yahoo(symbol, start_timestamp, end_timestamp):
     return df
 
 
+def add_index_data(dataframe: pd.DataFrame, index: str) -> pd.DataFrame:
+    """adds index"""
+    modified_df = dataframe.copy()
+    modified_df['Index'] = index
+
+    return modified_df
+
+
 def add_ema_data(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds EMA20 and EMA50 values
-    """
+    """adds EMA20 and EMA50 values"""
     ema_20 = dataframe['Close'].ewm(span=20, adjust=False).mean()
     ema_50 = dataframe['Close'].ewm(span=50, adjust=False).mean()
 
@@ -294,7 +301,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
 
     query = """
         INSERT INTO stock_data (
-            ticker, date, close, high, low, open, volume,
+            ticker, index, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
             iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_14, ma_200
         )
@@ -327,6 +334,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
     for _, row in df.tail(DAYS_TO_UPDATE_IN_DATABASE).iterrows():
         values.append((
             row['Ticker'],
+            row['Index'],
             row['Date'],
             to_float(row['Close']),
             to_float(row['High']),
@@ -399,9 +407,9 @@ if __name__ == '__main__':
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
 
     # debug statement for testing out winning stocks
-    symbol_df = return_analyzed_symbol_df(
-        'QCOM', start_timestamp, end_timestamp)
-    logger.debug(symbol_df)
+    # symbol_df = return_analyzed_symbol_df(
+    #     'sp100', 'QCOM', start_timestamp, end_timestamp)
+    # logger.debug(symbol_df)
 
     start_analyzing = datetime.now()
     stock_dfs = analyze_symbols_multi_process(

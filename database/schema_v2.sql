@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS stock_data (
     id SERIAL PRIMARY KEY,
     ticker VARCHAR(10) NOT NULL,
+    index VARCHAR(10) NOT NULL,
     date DATE NOT NULL,
     close DOUBLE PRECISION,
     high DOUBLE PRECISION,
