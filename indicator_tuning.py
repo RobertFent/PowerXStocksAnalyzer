@@ -2,7 +2,8 @@ import pandas as pd
 from sklearn.metrics import classification_report
 from xgboost import XGBClassifier
 
-df = pd.read_csv('combined_stock_data.csv')
+# todo: filter by index
+df = pd.read_csv('combined_stock_data_with_index.csv')
 # print(df.loc[0])
 
 # If I buy at close today → will price rise ≥2% in 5 days?

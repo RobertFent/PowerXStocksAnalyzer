@@ -4,6 +4,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 SP500_WIKI_URL = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+SP100_WIKI_URL = 'https://en.wikipedia.org/wiki/S%26P_100'
 NASDAQ100_WIKI_URL = 'https://en.wikipedia.org/wiki/Nasdaq-100'
 # DOW_WIKI_URL = 'https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average'
 
@@ -60,7 +61,9 @@ def write_nyse_symbols() -> None:
 
 if __name__ == '__main__':
     sp500_symbols = get_symbols_from_wiki(SP500_WIKI_URL)
+    sp100_symbols = get_symbols_from_wiki(SP100_WIKI_URL)
     nasdaq_100_symbols = get_symbols_from_wiki(NASDAQ100_WIKI_URL)
     save_symbols_to_csv(sp500_symbols, 'symbols/sp500.csv')
+    save_symbols_to_csv(sp100_symbols, 'symbols/sp100.csv')
     save_symbols_to_csv(nasdaq_100_symbols, 'symbols/nasdaq100.csv')
     write_nyse_symbols()
