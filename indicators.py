@@ -97,7 +97,7 @@ def return_analyzed_symbol_df(index: str, symbol: str, start_timestamp: int, end
         symbol_df = add_williams_percent_r_4(symbol_df)
         symbol_df = add_williams_percent_r_14(symbol_df)
         symbol_df = add_stochastic_slow(symbol_df)
-        symbol_df = add_adr_14(symbol_df)
+        symbol_df = add_adr_values(symbol_df)
 
         # loger.debug(f'Analyzing {symbol}...')
         return symbol_df
@@ -248,12 +248,14 @@ def add_stochastic_slow(dataframe: pd.DataFrame) -> pd.DataFrame:
     return modified_df
 
 
-def add_adr_14(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """adds ADR_14 (Average Daily Range over 14 days).
+def add_adr_values(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """adds ADR_7 and ADR_14 (Average Daily Range over 14 days).
         ADR_14 = rolling mean of (High - Low) over 14 days.
     """
+    adr7 = (dataframe['High'] - dataframe['Low']).rolling(window=7).mean()
     adr14 = (dataframe['High'] - dataframe['Low']).rolling(window=14).mean()
     modified_df = dataframe.copy()
+    modified_df['ADR_7'] = adr7
     modified_df['ADR_14'] = adr14
     return modified_df
 
@@ -303,7 +305,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
         INSERT INTO stock_data (
             ticker, index, date, close, high, low, open, volume,
             ema20, ema50, macd_line, signal_line, rsi_14, rsi_4,
-            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_14, ma_200
+            iv, willr_4, willr_14, stoch_percent_k, stoch_percent_d, adr_7, adr_14, ma_200
         )
         VALUES %s
         ON CONFLICT (ticker, date)
@@ -324,6 +326,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             willr_14 = EXCLUDED.willr_14,
             stoch_percent_k = EXCLUDED.stoch_percent_k,
             stoch_percent_d = EXCLUDED.stoch_percent_d,
+            adr_7 = EXCLUDED.adr_7,
             adr_14 = EXCLUDED.adr_14,
             ma_200 = EXCLUDED.ma_200,
             last_updated_at = NOW();
@@ -352,6 +355,7 @@ def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
             to_float(row['WILLR_14']),
             to_float(row['%K']),
             to_float(row['%D']),
+            to_float(row['ADR_7']),
             to_float(row['ADR_14']),
             to_float(row['MA_200'])
         ))
@@ -384,9 +388,9 @@ def setup_logger():
 
 def save_dfs_to_excel(stock_dfs: list[pd.DataFrame]) -> None:
     combined_df = pd.concat(stock_dfs, ignore_index=True)
-    combined_df.to_excel('combined_stock_data.xlsx',
-                         engine='openpyxl', index=False)
-    combined_df.to_csv('combined_stock_data.csv', index=False)
+    # combined_df.to_excel('combined_stock_data_with_index.xlsx',
+    #                      engine='openpyxl', index=False)
+    combined_df.to_csv('combined_stock_data_with_index.csv', index=False)
 
 
 def revalidate_stock_screener_cache() -> None:
