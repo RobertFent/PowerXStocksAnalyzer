@@ -22,10 +22,26 @@ load_dotenv()
 TRADING_DAYS_PER_YEAR = 252
 # change this to 250 more than days to update in db for more accurate results
 DAYS_IN_PAST_FOR_PROCESSING = 300
-DAYS_TO_UPDATE_IN_DATABASE = 7  # change this to increase the db insert window
+DAYS_TO_UPDATE_IN_DATABASE = 14  # change this to increase the db insert window
 
 # must match filename in symbols folder
 INDEX_LIST = ['sp100', 'nasdaq100', 'sp500']
+
+# Fail the run when more than this share of symbols could not be analyzed.
+# Individual delistings are normal; a tenth of the index disappearing is not,
+# and a run that exits 0 with a third of the data missing is worse than one
+# that fails loudly.
+MAX_FAILURE_RATE = 0.05
+
+# yfinance keeps its timezone and cookie caches in SQLite. Every worker process
+# would otherwise open the same files and they race — "database is locked",
+# "UNIQUE constraint failed: _cookieschema.strategy". Worse, opening one in the
+# parent before the fork leaves a file descriptor that every child inherits,
+# which shows up as "disk I/O error" across the whole run. So: the parent
+# creates the root and never opens it, and each worker gets a subdirectory of
+# its own (see prepare_yfinance_cache and init_worker_cache).
+YF_CACHE_DIR = os.getenv(
+    'YF_CACHE_DIR', os.path.join(os.getcwd(), '.cache', 'py-yfinance'))
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 REVALIDATE_SECRET = os.getenv('REVALIDATE_SECRET')
@@ -39,6 +55,31 @@ def verify_environment_variables_are_set() -> None:
     if DATABASE_URL is None:
         logger.error('DATABASE_URL missing! Exiting...')
         sys.exit(1)
+
+
+def prepare_yfinance_cache() -> None:
+    """Create the cache root. Deliberately does NOT open it.
+
+    Opening a yfinance cache in the parent — a single yf.download is enough —
+    leaves an open SQLite file descriptor that ProcessPoolExecutor duplicates
+    into every child, and concurrent use of an inherited connection fails as
+    'disk I/O error'.
+    """
+    try:
+        os.makedirs(YF_CACHE_DIR, exist_ok=True)
+    except Exception as e:
+        logger.warning('Could not create %s: %s', YF_CACHE_DIR, str(e))
+
+
+def init_worker_cache() -> None:
+    """Point this worker at a cache of its own, after the fork."""
+    try:
+        worker_dir = os.path.join(YF_CACHE_DIR, f'w{os.getpid()}')
+        os.makedirs(worker_dir, exist_ok=True)
+        yf.set_tz_cache_location(worker_dir)
+    except Exception:
+        # No cache is fine: yfinance falls back to fetching the timezone.
+        pass
 
 
 def get_symbols_from_csv(indices: list[str]) -> dict[str, list[str]]:
@@ -58,23 +99,35 @@ def get_symbols_from_csv(indices: list[str]) -> dict[str, list[str]]:
     return symbols
 
 
-def analyze_symbols_multi_process(symbols: dict[str, list[str]], start_timestamp: int, end_timestamp: int) -> list[pd.DataFrame]:
+def analyze_symbols_multi_process(symbols: dict[str, list[str]], start_timestamp: int, end_timestamp: int) -> tuple[list[pd.DataFrame], list[str]]:
+    """Returns the analyzed frames and the symbols that could not be analyzed."""
     analyzed_stocks: list[pd.DataFrame] = []
+    failed_symbols: list[str] = []
 
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        futures = []
+    with concurrent.futures.ProcessPoolExecutor(initializer=init_worker_cache) as executor:
+        futures = {}
         for index, listed_symbols in symbols.items():
-            futures.extend([
-                executor.submit(return_analyzed_symbol_df, index, symbol,
-                                start_timestamp, end_timestamp)
-                for symbol in listed_symbols
-            ])
+            for symbol in listed_symbols:
+                future = executor.submit(
+                    return_analyzed_symbol_df, index, symbol,
+                    start_timestamp, end_timestamp)
+                futures[future] = symbol
+
         for f in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
-            symbol_df = f.result()
-            if symbol_df is not None:
+            symbol = futures[f]
+            try:
+                symbol_df = f.result()
+            except Exception as e:
+                logger.error('Worker died on %s: %s', symbol, str(e))
+                failed_symbols.append(symbol)
+                continue
+
+            if symbol_df is None:
+                failed_symbols.append(symbol)
+            else:
                 analyzed_stocks.append(symbol_df)
 
-    return analyzed_stocks
+    return analyzed_stocks, failed_symbols
 
 
 def return_analyzed_symbol_df(index: str, symbol: str, start_timestamp: int, end_timestamp: int) -> pd.DataFrame | None:
@@ -89,7 +142,6 @@ def return_analyzed_symbol_df(index: str, symbol: str, start_timestamp: int, end
         symbol_df = add_rsi_14_data(symbol_df)
         symbol_df = add_rsi_4_data(symbol_df)
         symbol_df = add_implied_volatility(symbol_df)
-        # logger.debug(symbol_df)
         # todo: bid/ask spread (option related -> without tradier api not possible here)
         # todo: add bollinger
 
@@ -99,12 +151,14 @@ def return_analyzed_symbol_df(index: str, symbol: str, start_timestamp: int, end
         symbol_df = add_stochastic_slow(symbol_df)
         symbol_df = add_adr_values(symbol_df)
 
-        # loger.debug(f'Analyzing {symbol}...')
         return symbol_df
 
     except Exception as e:
+        # Returning None silently is how a run reports success with a third of
+        # the index missing.
+        logger.error('Error analyzing symbol %s: %s: %s',
+                     symbol, type(e).__name__, str(e))
         return None
-        # logger.error(f'Error analyzing symbol: {symbol}; {str(e)}')
 
 
 def get_ticker_data_yahoo(symbol, start_timestamp, end_timestamp):
@@ -288,14 +342,19 @@ def get_trading_time_range_timestamps() -> tuple[int, int]:
 
 
 def insert_symbols_data_into_database(dfs: list[pd.DataFrame]) -> None:
+    connection = None
     try:
         connection = psycopg2.connect(DATABASE_URL)
         for df in dfs:
             bulk_insert_symbol_data(df, connection)
     except Exception as e:
-        logger.error('Error inserting stock: %s', str(e))
+        # Previously this was logged and swallowed, and the finally block then
+        # raised NameError when the connect itself had failed.
+        logger.error('Error inserting stock data: %s', str(e))
+        raise
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def bulk_insert_symbol_data(df: pd.DataFrame, connection) -> None:
@@ -394,9 +453,15 @@ def save_dfs_to_excel(stock_dfs: list[pd.DataFrame]) -> None:
 
 
 def revalidate_stock_screener_cache() -> None:
+    if not STOCK_SCREENER_REVALIDATE_URL:
+        logger.info('STOCK_SCREENER_REVALIDATE_URL is not set - skipping')
+        return
+
     headers = {'x-revalidate-secret': REVALIDATE_SECRET}
+    # 5000 was seconds, not milliseconds: effectively no timeout at all, so a
+    # hanging endpoint would hang the whole nightly run.
     response = requests.post(
-        STOCK_SCREENER_REVALIDATE_URL, headers=headers, timeout=5000)
+        STOCK_SCREENER_REVALIDATE_URL, headers=headers, timeout=30)
     logger.info('Stock Screener revalidation response: %s', response.json())
 
 
@@ -406,20 +471,26 @@ if __name__ == '__main__':
 
     logger.info('\nStarting indicator script...')
     logger.info(datetime.now().strftime('%d/%m/%Y, %H:%M:%S'))
+
+    prepare_yfinance_cache()
+
     logger.info('Processing symbols and check for indicator matches...')
     symbols_from_csv = get_symbols_from_csv(INDEX_LIST)
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
 
-    # debug statement for testing out winning stocks
-    # symbol_df = return_analyzed_symbol_df(
-    #     'sp100', 'QCOM', start_timestamp, end_timestamp)
-    # logger.debug(symbol_df)
+    total_symbols = sum(len(s) for s in symbols_from_csv.values())
 
     start_analyzing = datetime.now()
-    stock_dfs = analyze_symbols_multi_process(
+    stock_dfs, failed = analyze_symbols_multi_process(
         symbols_from_csv, start_timestamp, end_timestamp)
     analyzing_duration_in_seconds = (
         datetime.now() - start_analyzing).total_seconds()
+
+    failure_rate = len(failed) / total_symbols if total_symbols else 0.0
+    logger.info('Analyzed %s of %s symbols (%s failed, %.1f%%)',
+                len(stock_dfs), total_symbols, len(failed), failure_rate * 100)
+    if failed:
+        logger.warning('Failed symbols: %s', ', '.join(sorted(failed)))
 
     start_inserting = datetime.now()
     insert_symbols_data_into_database(stock_dfs)
@@ -434,3 +505,10 @@ if __name__ == '__main__':
 
     # send request to refresh cache after new data is inserted
     revalidate_stock_screener_cache()
+
+    # Exit non-zero so systemd - and a Kuma push monitor - see a run that
+    # technically finished but produced a fraction of the data.
+    if failure_rate > MAX_FAILURE_RATE:
+        logger.error('%.1f%% of symbols failed, above the %.1f%% threshold',
+                     failure_rate * 100, MAX_FAILURE_RATE * 100)
+        sys.exit(1)
