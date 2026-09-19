@@ -69,7 +69,6 @@ BIO,Bio-Rad Laboratories,Health Care
 TECH,Bio-Techne,Health Care
 BIIB,Biogen,Health Care
 BLK,BlackRock,Financials
-BK,BNY Mellon,Financials
 BA,Boeing,Industrials
 BKNG,Booking Holdings,Consumer Discretionary
 BWA,BorgWarner,Consumer Discretionary
@@ -130,7 +129,6 @@ CPRT,Copart,Industrials
 GLW,Corning,Information Technology
 CTVA,Corteva,Materials
 COST,Costco,Consumer Staples
-CTRA,Coterra,Energy
 CCI,Crown Castle,Real Estate
 CSX,CSX,Industrials
 CMI,Cummins,Industrials
@@ -167,7 +165,6 @@ EBAY,eBay,Consumer Discretionary
 ECL,Ecolab,Materials
 EIX,Edison International,Utilities
 EW,Edwards Lifesciences,Health Care
-EA,Electronic Arts,Communication Services
 LLY,Eli Lilly & Co,Health Care
 EMR,Emerson Electric Company,Industrials
 ENPH,Enphase Energy,Information Technology
@@ -229,7 +226,6 @@ HSIC,Henry Schein,Health Care
 HES,Hess Corporation,Energy
 HPE,Hewlett Packard Enterprise,Information Technology
 HLT,Hilton Worldwide,Consumer Discretionary
-HOLX,Hologic,Health Care
 HD,Home Depot,Consumer Discretionary
 HON,Honeywell,Industrials
 HRL,Hormel,Consumer Staples
