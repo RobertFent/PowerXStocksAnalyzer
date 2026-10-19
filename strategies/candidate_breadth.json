@@ -1,0 +1,31 @@
+{
+  "note": "Candidate: broad-pullback variant (breadth space), 5 slots. Holdout 2025+: 18.3% CAGR, -16.8% DD, but walk-forward selection in this space was unstable (OOS 6.2% CAGR, -39% DD). Paper-trade before use.",
+  "params": {
+    "entry_indicator": "rsi",
+    "entry_length": 5,
+    "entry_threshold": 30.0,
+    "entry_mode": "cross",
+    "exit_rule": "osc",
+    "exit_indicator": "",
+    "exit_length": 0,
+    "exit_threshold": 60.0,
+    "trend_ma": 100,
+    "market_ma": 200,
+    "stop_adr_mult": 4.0,
+    "trail_adr_mult": 0.0,
+    "max_hold_days": 0,
+    "min_price": 5.0,
+    "min_dollar_volume": 5000000.0,
+    "execution": "next_open",
+    "breadth_min": 0.15,
+    "rank_by": "oversold",
+    "max_positions": 5
+  },
+  "tuning_2016_2024": {
+    "cagr": 0.136,
+    "max_drawdown": -0.1324,
+    "sharpe": 1.0822,
+    "trades": 583.0,
+    "win_rate": 0.7187
+  }
+}

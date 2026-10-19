@@ -1,5 +1,8 @@
 .env
-__pycache__
-output/**
-logs
+.venv/
+__pycache__/
+.mypy_cache/
+logs/
+data/
+output/
 combined_stock_data*
