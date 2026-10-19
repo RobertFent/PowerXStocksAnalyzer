@@ -11,10 +11,6 @@ requests==2.32.5
 tqdm==4.67.1
 yfinance==0.2.66
 
-# backtest/
-numba==0.61.2
-pyarrow==21.0.0
-
 # typing (mypy / Pylance)
 pandas-stubs==3.0.0.260204
 types-psycopg2==2.9.21.20251012
