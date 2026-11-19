@@ -1,9 +1,29 @@
+"""Daily scraper, the only script that has to run: once per trading day after the US close.
+
+1. prices + indicators of every index member                   -> stock_data
+2. option positioning (walls, gamma / vanna / charm exposure,
+   implied volatility, skew, max pain, earnings date) of the
+   most liquid symbols                                         -> gamma_levels
+
+Option greeks are computed with Black-Scholes from Yahoo's open interest and implied volatility.
+Dealer positioning is the usual naive assumption (dealers long calls, short puts): good enough for
+index ETFs, rough for single stocks. Yahoo empties the open interest overnight US time, so a run
+before the US session gets no usable option chains.
+
+    python3 indicators.py                              # everything
+    python3 indicators.py --only prices                # or: --only options
+    python3 indicators.py --dry-run SPY AAPL           # print the option levels, no database
+"""
+import argparse
 import os
 import sys
 import csv
-from datetime import datetime, time, timedelta
+import time as time_module
+from datetime import date, datetime, time, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent
 import logging
+from math import erf
 from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import execute_values
@@ -46,6 +66,59 @@ YF_CACHE_DIR = os.getenv(
 DATABASE_URL = os.getenv('DATABASE_URL')
 REVALIDATE_SECRET = os.getenv('REVALIDATE_SECRET')
 STOCK_SCREENER_REVALIDATE_URL = os.getenv('STOCK_SCREENER_REVALIDATE_URL', '')
+
+# ---- option positioning ----
+# must match filename in symbols folder
+OPTIONS_INDEX_LIST = ['sp100']
+OPTIONS_EXTRA_SYMBOLS = ['SPY', 'QQQ']
+
+MAX_DAYS_TO_EXPIRATION = 45
+MIN_TOTAL_OPEN_INTEREST = 1000  # below this the walls are meaningless
+# Yahoo empties the open interest overnight (US time) until the session starts. If less than
+# this share of the strikes within 10% around spot has open interest the chain is not usable.
+MIN_OPEN_INTEREST_COVERAGE = 0.5
+RISK_FREE_RATE = 0.04
+CONTRACT_SIZE = 100
+# Yahoo returns ~0 or absurd IVs for strikes without a quote (most of them outside market hours)
+MIN_VALID_IV = 0.03
+MAX_VALID_IV = 4.0
+# gamma flip is searched between -30% and +30% around spot
+FLIP_GRID = np.linspace(0.7, 1.3, 121)
+OPTIONS_MAX_WORKERS = 4  # keep low, Yahoo rate limits option chain requests
+OPTIONS_RETRIES = 3
+
+CREATE_GAMMA_LEVELS_TABLE_QUERY = """
+    CREATE TABLE IF NOT EXISTS gamma_levels (
+        id SERIAL PRIMARY KEY,
+        ticker VARCHAR(10) NOT NULL,
+        date DATE NOT NULL,
+        spot DOUBLE PRECISION,
+        call_wall DOUBLE PRECISION,
+        put_wall DOUBLE PRECISION,
+        gamma_flip DOUBLE PRECISION,
+        net_gex DOUBLE PRECISION,
+        call_gex DOUBLE PRECISION,
+        put_gex DOUBLE PRECISION,
+        call_oi BIGINT,
+        put_oi BIGINT,
+        expirations SMALLINT,
+        last_updated_at TIMESTAMP DEFAULT NOW(),
+
+        UNIQUE (ticker, date)
+    );
+    ALTER TABLE gamma_levels
+        ADD COLUMN IF NOT EXISTS net_vanna DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS net_charm DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS atm_iv_30d DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS max_pain DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS max_pain_expiration DATE,
+        ADD COLUMN IF NOT EXISTS skew_25_delta DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS realized_volatility_30d DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS call_volume BIGINT,
+        ADD COLUMN IF NOT EXISTS put_volume BIGINT,
+        ADD COLUMN IF NOT EXISTS next_earnings_date DATE,
+        ADD COLUMN IF NOT EXISTS ex_dividend_date DATE;
+"""
 
 # init logger
 logger = logging.getLogger('indicators.py')
@@ -318,17 +391,14 @@ def get_trading_time_range_timestamps() -> tuple[int, int]:
     nyse = mcal.get_calendar('NYSE')
     tz = pytz.timezone('US/Eastern')
 
-    # get latest 200 trading days
     today = datetime.now(tz).date()
     schedule = nyse.schedule(
         start_date=today - timedelta(days=DAYS_IN_PAST_FOR_PROCESSING), end_date=today)
-    trading_days = schedule.index.date
 
-    # get earliest and latest possible dates
-    # last trading day is yesterday if today is Mon-Fri else its just the last trading timestamp
-    last_prev_trading_day_index = -2 if today.weekday() <= 4 else -1
-    start_day = trading_days[0]  # 0-based index
-    end_day = trading_days[last_prev_trading_day_index]
+    # the last session that is already closed: today when run after the close, else the previous one
+    completed_sessions = schedule[schedule['market_close'] <= pd.Timestamp.now(tz='UTC')]
+    start_day = schedule.index[0].date()
+    end_day = completed_sessions.index[-1].date()
 
     # Combine with NYSE open and close times
     start_dt = tz.localize(datetime.combine(start_day, time(9, 30)))
@@ -465,15 +535,371 @@ def revalidate_stock_screener_cache() -> None:
     logger.info('Stock Screener revalidation response: %s', response.json())
 
 
-if __name__ == '__main__':
-    verify_environment_variables_are_set()
-    setup_logger()
+# ---- option positioning ----
 
-    logger.info('\nStarting indicator script...')
-    logger.info(datetime.now().strftime('%d/%m/%Y, %H:%M:%S'))
+class OpenInterestNotPopulated(Exception):
+    pass
 
-    prepare_yfinance_cache()
 
+def black_scholes_gamma(spot, strikes, iv, years_to_expiration):
+    """gamma is identical for calls and puts; spot may be a scalar or a column vector"""
+    sqrt_t = np.sqrt(years_to_expiration)
+    d1 = (np.log(spot / strikes) + (RISK_FREE_RATE + 0.5 * iv ** 2)
+          * years_to_expiration) / (iv * sqrt_t)
+    return np.exp(-0.5 * d1 ** 2) / (np.sqrt(2 * np.pi) * spot * iv * sqrt_t)
+
+
+def gamma_exposure(spot, contracts: pd.DataFrame):
+    """signed dealer gamma exposure per contract row in USD per 1% move of the underlying"""
+    gamma = black_scholes_gamma(spot, contracts['strike'].to_numpy(),
+                                contracts['iv'].to_numpy(), contracts['t'].to_numpy())
+    return (contracts['sign'].to_numpy() * gamma * contracts['oi'].to_numpy()
+            * CONTRACT_SIZE * spot ** 2 * 0.01)
+
+
+def vanna_and_charm_exposure(spot: float, contracts: pd.DataFrame) -> tuple[float, float]:
+    """net dealer vanna and charm exposure, both as USD of delta the dealers have to trade:
+        vanna per 1 volatility point the IV rises, charm per calendar day that passes.
+        without dividends vanna and charm are identical for calls and puts.
+    """
+    strikes = contracts['strike'].to_numpy()
+    iv = contracts['iv'].to_numpy()
+    t = contracts['t'].to_numpy()
+    sqrt_t = np.sqrt(t)
+
+    d1 = (np.log(spot / strikes) + (RISK_FREE_RATE + 0.5 * iv ** 2) * t) / (iv * sqrt_t)
+    d2 = d1 - iv * sqrt_t
+    density = np.exp(-0.5 * d1 ** 2) / np.sqrt(2 * np.pi)
+
+    vanna = -density * d2 / iv
+    charm = -density * (2 * RISK_FREE_RATE * t - d2 * iv * sqrt_t) / (2 * t * iv * sqrt_t)
+
+    delta_notional = contracts['sign'].to_numpy() * contracts['oi'].to_numpy() * CONTRACT_SIZE * spot
+    return float((vanna * 0.01 * delta_notional).sum()), float((charm / 365 * delta_notional).sum())
+
+
+def find_max_pain(contracts: pd.DataFrame) -> tuple[float, date]:
+    """strike at which the option holders of the expiration with the most open interest lose the most"""
+    expiration = contracts.groupby('expiration')['oi'].sum().idxmax()
+    chain = contracts[contracts['expiration'] == expiration]
+    strikes = chain['strike'].to_numpy()
+    oi = chain['oi'].to_numpy()
+    is_call = chain['sign'].to_numpy() > 0
+
+    candidates = np.unique(strikes)
+    settle = candidates[:, None]
+    payout = np.where(is_call, np.maximum(settle - strikes, 0), np.maximum(strikes - settle, 0)) * oi
+    return float(candidates[payout.sum(axis=1).argmin()]), expiration
+
+
+def find_atm_iv_30d(spot: float, contracts: pd.DataFrame) -> float | None:
+    """at-the-money implied volatility in percent, interpolated to 30 days in total variance.
+        only IVs Yahoo really delivered are used, so this is empty when the chains had no quotes.
+    """
+    quoted = contracts[~contracts['iv_estimated']]
+    points = []
+    for t, chain in quoted.groupby('t'):
+        smile = chain.groupby('strike')['iv'].mean()
+        strikes = smile.index.to_numpy()
+        if len(smile) < 2 or spot < strikes[0] or spot > strikes[-1]:
+            continue
+        points.append((t, float(np.interp(spot, strikes, smile.to_numpy()))))
+    if not points:
+        return None
+
+    years = np.array([p[0] for p in points])
+    total_variance = np.array([p[1] ** 2 * p[0] for p in points])
+    target = 30 / 365
+    if len(points) == 1 or target <= years[0] or target >= years[-1]:
+        # no expiration on one side of 30 days: take the closest one as it is
+        return points[int(np.argmin(np.abs(years - target)))][1] * 100
+    return float(np.sqrt(np.interp(target, years, total_variance) / target) * 100)
+
+
+def find_skew_25_delta(contracts: pd.DataFrame) -> float | None:
+    """IV of the 25 delta put minus IV of the 25 delta call in volatility points, taken from the
+        expiration closest to 30 days. positive = downside protection is the more expensive side.
+        only IVs Yahoo really delivered are used.
+    """
+    quoted = contracts[~contracts['iv_estimated']]
+    if quoted.empty:
+        return None
+
+    years = quoted['t'].unique()
+    chain = quoted[quoted['t'] == years[np.argmin(np.abs(years - 30 / 365))]]
+    iv = chain['iv'].to_numpy()
+    t = chain['t'].to_numpy()
+    spot = chain['spot'].to_numpy()
+    d1 = (np.log(spot / chain['strike'].to_numpy()) + (RISK_FREE_RATE + 0.5 * iv ** 2) * t) / (iv * np.sqrt(t))
+    call_delta = 0.5 * (1 + np.vectorize(erf)(d1 / np.sqrt(2)))
+    is_call = chain['sign'].to_numpy() > 0
+
+    wing_iv = []
+    for side, delta in ((is_call, call_delta), (~is_call, 1 - call_delta)):
+        order = np.argsort(delta[side])
+        deltas = delta[side][order]
+        if len(deltas) < 2 or deltas[0] > 0.25 or deltas[-1] < 0.25:
+            return None
+        wing_iv.append(np.interp(0.25, deltas, iv[side][order]))
+    return float((wing_iv[1] - wing_iv[0]) * 100)
+
+
+def find_gamma_flip(spot: float, contracts: pd.DataFrame) -> float | None:
+    """price closest to spot where total net gamma exposure changes its sign"""
+    prices = spot * FLIP_GRID
+    profile = gamma_exposure(prices[:, None], contracts).sum(axis=1)
+
+    crossings = np.where(np.sign(profile[:-1]) * np.sign(profile[1:]) < 0)[0]
+    if len(crossings) == 0:
+        return None
+
+    # linear interpolation between the two grid points around each crossing
+    flips = prices[crossings] - profile[crossings] * (
+        prices[crossings + 1] - prices[crossings]) / (profile[crossings + 1] - profile[crossings])
+    return float(flips[np.argmin(np.abs(flips - spot))])
+
+
+def compute_levels(spot: float, contracts: pd.DataFrame) -> dict | None:
+    """contracts: one row per option with strike, oi, iv, iv_estimated, t (years),
+        expiration (date) and sign (+1 call, -1 put)
+    """
+    if contracts.empty or contracts['oi'].sum() < MIN_TOTAL_OPEN_INTEREST:
+        return None
+
+    contracts = contracts.assign(gex=gamma_exposure(spot, contracts))
+    calls = contracts[contracts['sign'] > 0]
+    puts = contracts[contracts['sign'] < 0]
+    if calls.empty or puts.empty:
+        return None
+
+    net_vanna, net_charm = vanna_and_charm_exposure(spot, contracts)
+    max_pain, max_pain_expiration = find_max_pain(contracts)
+
+    return {
+        'spot': spot,
+        'call_wall': float(calls.groupby('strike')['gex'].sum().idxmax()),
+        'put_wall': float(puts.groupby('strike')['gex'].sum().idxmin()),
+        'gamma_flip': find_gamma_flip(spot, contracts),
+        'net_gex': float(contracts['gex'].sum()),
+        'call_gex': float(calls['gex'].sum()),
+        'put_gex': float(puts['gex'].sum()),
+        'call_oi': int(calls['oi'].sum()),
+        'put_oi': int(puts['oi'].sum()),
+        'expirations': int(contracts['t'].nunique()),
+        'net_vanna': net_vanna,
+        'net_charm': net_charm,
+        'atm_iv_30d': find_atm_iv_30d(spot, contracts),
+        'skew_25_delta': find_skew_25_delta(contracts.assign(spot=spot)),
+        'max_pain': max_pain,
+        'max_pain_expiration': max_pain_expiration,
+    }
+
+
+def clean_expiration(calls: pd.DataFrame, puts: pd.DataFrame, fallback_iv: float) -> pd.DataFrame:
+    """returns the open contracts of one expiration with a usable IV on every row.
+        unusable IVs are interpolated over the strikes of the same expiration,
+        if there is nothing to interpolate from the realized volatility is used.
+    """
+    frames = []
+    for chain, sign in ((calls, 1), (puts, -1)):
+        frames.append(pd.DataFrame({
+            'strike': chain['strike'].astype(float),
+            'oi': chain['openInterest'].fillna(0).astype(float),
+            'iv': chain['impliedVolatility'].astype(float),
+            'sign': sign,
+        }))
+    contracts = pd.concat(frames, ignore_index=True)
+    contracts = contracts[contracts['oi'] > 0]
+
+    valid = contracts['iv'].between(MIN_VALID_IV, MAX_VALID_IV)
+    smile = contracts[valid].groupby('strike')['iv'].mean()
+    if len(smile) >= 2:
+        interpolated = np.interp(
+            contracts['strike'], smile.index.to_numpy(), smile.to_numpy())
+    else:
+        interpolated = np.full(len(contracts), fallback_iv)
+    contracts['iv'] = np.where(valid, contracts['iv'], interpolated)
+    contracts['iv_estimated'] = ~valid
+
+    return contracts
+
+
+def next_date(value, today: date) -> date | None:
+    """first date from today on out of a date or a list of dates as Yahoo's calendar delivers them"""
+    values = value if isinstance(value, (list, tuple)) else [value]
+    values = [v.date() if isinstance(v, datetime) else v for v in values]
+    upcoming = sorted(v for v in values if isinstance(v, date) and v >= today)
+    return upcoming[0] if upcoming else None
+
+
+def fetch_calendar(ticker: yf.Ticker, today: date) -> dict:
+    """ETFs have no calendar and Yahoo changes this endpoint now and then, so it must never fail the symbol"""
+    try:
+        calendar = ticker.calendar or {}
+        return {
+            'next_earnings_date': next_date(calendar.get('Earnings Date'), today),
+            'ex_dividend_date': next_date(calendar.get('Ex-Dividend Date'), today),
+        }
+    except Exception:
+        return {'next_earnings_date': None, 'ex_dividend_date': None}
+
+
+def fetch_contracts(symbol: str, today: date) -> tuple[float, date, pd.DataFrame, dict]:
+    ticker = yf.Ticker(symbol)
+
+    history = ticker.history(period='3mo', auto_adjust=False)
+    spot = float(history['Close'].iloc[-1])
+    as_of = history.index[-1].date()
+    realized_volatility = float(
+        np.log(history['Close']).diff().tail(30).std() * np.sqrt(252))
+
+    extras = {
+        'realized_volatility_30d': realized_volatility * 100,
+        'call_volume': 0,
+        'put_volume': 0,
+        **fetch_calendar(ticker, today),
+    }
+
+    frames = []
+    near_spot_rows = 0
+    near_spot_rows_with_oi = 0
+    for expiration in ticker.options:
+        days_to_expiration = (
+            datetime.strptime(expiration, '%Y-%m-%d').date() - today).days
+        if days_to_expiration < 0 or days_to_expiration > MAX_DAYS_TO_EXPIRATION:
+            continue
+
+        chain = ticker.option_chain(expiration)
+        extras['call_volume'] += int(chain.calls['volume'].fillna(0).sum())
+        extras['put_volume'] += int(chain.puts['volume'].fillna(0).sum())
+        for side in (chain.calls, chain.puts):
+            near_spot = side[side['strike'].between(spot * 0.9, spot * 1.1)]
+            near_spot_rows += len(near_spot)
+            near_spot_rows_with_oi += int(
+                (near_spot['openInterest'].fillna(0) > 0).sum())
+        contracts = clean_expiration(
+            chain.calls, chain.puts, realized_volatility)
+        # expiration day itself counts as half a day
+        contracts['t'] = max(days_to_expiration, 0.5) / 365
+        contracts['expiration'] = today + timedelta(days=days_to_expiration)
+        frames.append(contracts)
+
+    if not frames:
+        return spot, as_of, pd.DataFrame(), extras
+    if near_spot_rows_with_oi < MIN_OPEN_INTEREST_COVERAGE * near_spot_rows:
+        raise OpenInterestNotPopulated(
+            f'{near_spot_rows_with_oi} of {near_spot_rows} strikes near spot have open interest')
+    return spot, as_of, pd.concat(frames, ignore_index=True), extras
+
+
+def return_symbol_levels(symbol: str, today: date) -> dict | None:
+    for attempt in range(1, OPTIONS_RETRIES + 1):
+        try:
+            spot, as_of, contracts, extras = fetch_contracts(symbol, today)
+            levels = compute_levels(spot, contracts)
+            if levels is None:
+                logger.warning('%s: not enough open interest', symbol)
+                return None
+
+            estimated_oi = contracts.loc[contracts['iv_estimated'], 'oi'].sum()
+            levels['iv_estimated_share'] = float(
+                estimated_oi / contracts['oi'].sum())
+            return {'ticker': symbol.upper(), 'date': as_of, **levels, **extras}
+        except OpenInterestNotPopulated as e:
+            logger.warning('%s: open interest not populated by Yahoo (%s)',
+                           symbol, str(e))
+            return None
+        except Exception as e:
+            if attempt == OPTIONS_RETRIES:
+                logger.error('Error fetching options of %s: %s',
+                             symbol, str(e))
+            else:
+                time_module.sleep(5 * attempt)
+
+    return None
+
+
+def analyze_option_symbols(symbols: list[str]) -> list[dict]:
+    today = datetime.now(pytz.timezone('US/Eastern')).date()
+    results: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=OPTIONS_MAX_WORKERS) as executor:
+        futures = [executor.submit(return_symbol_levels, symbol, today)
+                   for symbol in symbols]
+        for f in tqdm(as_completed(futures), total=len(futures)):
+            levels = f.result()
+            if levels is not None:
+                results.append(levels)
+
+    return results
+
+
+def insert_levels_into_database(levels: list[dict]) -> None:
+    query = """
+        INSERT INTO gamma_levels (
+            ticker, date, spot, call_wall, put_wall, gamma_flip,
+            net_gex, call_gex, put_gex, call_oi, put_oi, expirations,
+            net_vanna, net_charm, atm_iv_30d, max_pain, max_pain_expiration,
+            skew_25_delta, realized_volatility_30d, call_volume, put_volume,
+            next_earnings_date, ex_dividend_date
+        )
+        VALUES %s
+        ON CONFLICT (ticker, date)
+        DO UPDATE SET
+            spot = EXCLUDED.spot,
+            call_wall = EXCLUDED.call_wall,
+            put_wall = EXCLUDED.put_wall,
+            gamma_flip = EXCLUDED.gamma_flip,
+            net_gex = EXCLUDED.net_gex,
+            call_gex = EXCLUDED.call_gex,
+            put_gex = EXCLUDED.put_gex,
+            call_oi = EXCLUDED.call_oi,
+            put_oi = EXCLUDED.put_oi,
+            expirations = EXCLUDED.expirations,
+            net_vanna = EXCLUDED.net_vanna,
+            net_charm = EXCLUDED.net_charm,
+            atm_iv_30d = EXCLUDED.atm_iv_30d,
+            max_pain = EXCLUDED.max_pain,
+            max_pain_expiration = EXCLUDED.max_pain_expiration,
+            skew_25_delta = EXCLUDED.skew_25_delta,
+            realized_volatility_30d = EXCLUDED.realized_volatility_30d,
+            call_volume = EXCLUDED.call_volume,
+            put_volume = EXCLUDED.put_volume,
+            next_earnings_date = EXCLUDED.next_earnings_date,
+            ex_dividend_date = EXCLUDED.ex_dividend_date,
+            last_updated_at = NOW();
+    """
+    values = [(
+        row['ticker'], row['date'], to_float(row['spot']), to_float(
+            row['call_wall']), to_float(row['put_wall']),
+        to_float(row['gamma_flip']), to_float(
+            row['net_gex']), to_float(row['call_gex']),
+        to_float(row['put_gex']), row['call_oi'], row['put_oi'], row['expirations'],
+        to_float(row['net_vanna']), to_float(row['net_charm']), to_float(row['atm_iv_30d']),
+        to_float(row['max_pain']), row['max_pain_expiration'],
+        to_float(row['skew_25_delta']), to_float(row['realized_volatility_30d']),
+        row['call_volume'], row['put_volume'], row['next_earnings_date'], row['ex_dividend_date']
+    ) for row in levels]
+
+    connection = psycopg2.connect(DATABASE_URL)
+    try:
+        with connection.cursor() as cur:
+            cur.execute(CREATE_GAMMA_LEVELS_TABLE_QUERY)
+            execute_values(cur, query, values)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_option_symbols() -> list[str]:
+    symbols = list(OPTIONS_EXTRA_SYMBOLS)
+    for listed_symbols in get_symbols_from_csv(OPTIONS_INDEX_LIST).values():
+        symbols.extend(listed_symbols)
+    return list(dict.fromkeys(symbols))  # unique, keeps order
+
+
+def scrape_prices_and_indicators() -> float:
+    """returns the share of symbols that failed"""
     logger.info('Processing symbols and check for indicator matches...')
     symbols_from_csv = get_symbols_from_csv(INDEX_LIST)
     start_timestamp, end_timestamp = get_trading_time_range_timestamps()
@@ -495,7 +921,6 @@ if __name__ == '__main__':
     start_inserting = datetime.now()
     insert_symbols_data_into_database(stock_dfs)
     # save_dfs_to_excel(stock_dfs)
-
     inserting_duration_in_seconds = (
         datetime.now() - start_inserting).total_seconds()
 
@@ -503,8 +928,70 @@ if __name__ == '__main__':
     logger.info('Inserting / saving took %s seconds',
                 inserting_duration_in_seconds)
 
+    return failure_rate
+
+
+def scrape_option_levels(symbols: list[str], dry_run: bool) -> None:
+    start = datetime.now()
+    symbol_levels = analyze_option_symbols(symbols)
+    if len(symbol_levels) < len(symbols) / 2:
+        logger.error('Only %s of %s symbols delivered usable option chains. Yahoo has no open '
+                     'interest outside of / before the US session, check the time of the run.',
+                     len(symbol_levels), len(symbols))
+    logger.info('Option levels for %s symbols took %s seconds',
+                len(symbol_levels), (datetime.now() - start).total_seconds())
+
+    estimated = [row['iv_estimated_share'] for row in symbol_levels]
+    if estimated:
+        logger.info('Share of open interest with estimated IV: median %.0f%%, max %.0f%%',
+                    np.median(estimated) * 100, max(estimated) * 100)
+
+    if dry_run:
+        print(f'{len(symbol_levels)} of {len(symbols)} symbols usable, see logs/ for skipped ones')
+        # one symbol per column, there are too many values for one row
+        print(pd.DataFrame(symbol_levels).set_index('ticker').T.to_string()
+              if symbol_levels else 'no data')
+    elif symbol_levels:
+        try:
+            insert_levels_into_database(symbol_levels)
+        except Exception as e:
+            logger.error('Error inserting option levels: %s', str(e))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('symbols', nargs='*',
+                        help='with --dry-run: option symbols instead of the configured lists')
+    parser.add_argument('--only', choices=['prices', 'options'],
+                        help='run just one of the two parts')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='print the option levels of the given symbols, nothing is written')
+    args = parser.parse_args()
+
+    setup_logger()
+    logger.info('\nStarting indicator script...')
+    logger.info(datetime.now().strftime('%d/%m/%Y, %H:%M:%S'))
+
+    prepare_yfinance_cache()
+
+    if args.dry_run:
+        scrape_option_levels(args.symbols or get_option_symbols(), dry_run=True)
+        sys.exit(0)
+
+    verify_environment_variables_are_set()
+
+    # one after the other, so both parts don't hit Yahoo's rate limit together
+    failure_rate = 0.0
+    if args.only != 'options':
+        failure_rate = scrape_prices_and_indicators()
+    if args.only != 'prices':
+        scrape_option_levels(get_option_symbols(), dry_run=False)
+
     # send request to refresh cache after new data is inserted
-    revalidate_stock_screener_cache()
+    try:
+        revalidate_stock_screener_cache()
+    except Exception as e:
+        logger.error('Revalidation failed: %s', str(e))
 
     # Exit non-zero so systemd - and a Kuma push monitor - see a run that
     # technically finished but produced a fraction of the data.
