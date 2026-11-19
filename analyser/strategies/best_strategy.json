@@ -1,0 +1,43 @@
+{
+  "name": "Best of search: momentum top 30 (6 months, monthly)",
+  "note": "Best of 400 momentum/breakout rule sets on 2016-2024 with point-in-time index membership. Walk-forward 2019-24: 6.8% CAGR, -38% drawdown (SPY 17.1%). Holdout 2025+: -4.6%. Deflated luck check: 1%. Kept only as a reference for what momentum looks like here - do not trade.",
+  "params": {
+    "entry_indicator": "rs",
+    "entry_length": 126,
+    "entry_threshold": 30.0,
+    "entry_mode": "cross",
+    "exit_rule": "ma",
+    "exit_indicator": "",
+    "exit_length": 200,
+    "exit_threshold": 30.0,
+    "trend_ma": 0,
+    "market_ma": 0,
+    "stop_adr_mult": 0.0,
+    "trail_adr_mult": 0.0,
+    "max_hold_days": 0,
+    "min_price": 5.0,
+    "min_dollar_volume": 5000000.0,
+    "execution": "next_open",
+    "breadth_min": 0.0,
+    "rank_by": "momentum",
+    "max_positions": 10,
+    "rebalance": "monthly",
+    "skip_days": 0
+  },
+  "metric": "calmar",
+  "tuning_metrics": {
+    "cagr": 0.22377685621431453,
+    "max_drawdown": -0.23108536260884383,
+    "sharpe": 1.0207702499140408,
+    "trades": 131.0,
+    "win_rate": 0.4961832061068702
+  },
+  "holdout_metrics": {
+    "cagr": -0.046037667520972714,
+    "max_drawdown": -0.21775084785856735,
+    "sharpe": -0.10328288534677985,
+    "trades": 35.0,
+    "win_rate": 0.2857142857142857
+  },
+  "trials": 400
+}

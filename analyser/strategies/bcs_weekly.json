@@ -1,0 +1,23 @@
+{
+  "name": "SPY call spread variant: weekly ladder, 30 days, 50% stop",
+  "type": "spreads",
+  "note": "From the tune: a new $10 spread that costs $5.00 every week, one monthly expiration out, close at $9.90 / 50% stop / expiry, no trend filter; four to five spreads open at once (10% of the account at risk in total). Four times the trades of the monthly routine, so its numbers rest on more evidence.",
+  "params": {
+    "offset": 0.017,
+    "width": 10.0,
+    "dte": 30,
+    "target": 0.99,
+    "stop": 0.5,
+    "cadence": "weekly",
+    "trend_ma": 0,
+    "risk": 0.1,
+    "iv_mult": 1.0,
+    "slip": 0.05,
+    "commission": 0.65,
+    "rate": -1.0,
+    "div_yield": 0.014,
+    "fixed_debit": 5.0,
+    "strike_mode": "debit",
+    "target_div": 0.95
+  }
+}

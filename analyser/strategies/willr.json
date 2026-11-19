@@ -1,0 +1,32 @@
+{
+  "name": "Williams %R dip-buying (reference)",
+  "note": "Reference rule set from the 2016-2024 search with trend+market filter. Point-in-time members: 7.6%/yr vs SPY 15%, verdict 2 of 7. Kept as the dip-buying reference.",
+  "params": {
+    "entry_indicator": "willr",
+    "entry_length": 10,
+    "entry_threshold": 10.0,
+    "entry_mode": "level",
+    "exit_rule": "osc",
+    "exit_indicator": "",
+    "exit_length": 0,
+    "exit_threshold": 40.0,
+    "trend_ma": 200,
+    "market_ma": 200,
+    "stop_adr_mult": 4.0,
+    "trail_adr_mult": 0.0,
+    "max_hold_days": 20,
+    "min_price": 5.0,
+    "min_dollar_volume": 5000000.0,
+    "execution": "next_open",
+    "breadth_min": 0.0,
+    "rank_by": "oversold",
+    "max_positions": 10
+  },
+  "tuning_2016_2024": {
+    "cagr": 0.1822,
+    "max_drawdown": -0.1807,
+    "sharpe": 1.2833,
+    "trades": 3034.0,
+    "win_rate": 0.6694
+  }
+}

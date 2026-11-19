@@ -1,0 +1,23 @@
+{
+  "name": "SPY call spread variant: in the money, 30 days, 50% stop, no filter",
+  "type": "spreads",
+  "note": "Best of the 720-setup tune by Calmar: every third Friday buy the $10 spread that costs $6.00 (strikes below the price), one monthly expiration out, close at $9.90 or when it has lost 50% of the debit, or at expiry; no trend filter. Found by searching, so its development numbers are flattered.",
+  "params": {
+    "offset": 0.017,
+    "width": 10.0,
+    "dte": 30,
+    "target": 0.99,
+    "stop": 0.5,
+    "cadence": "expiry",
+    "trend_ma": 0,
+    "risk": 0.1,
+    "iv_mult": 1.0,
+    "slip": 0.05,
+    "commission": 0.65,
+    "rate": -1.0,
+    "div_yield": 0.014,
+    "fixed_debit": 6.0,
+    "strike_mode": "debit",
+    "target_div": 0.95
+  }
+}

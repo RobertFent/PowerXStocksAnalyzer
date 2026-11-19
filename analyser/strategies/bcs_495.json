@@ -1,0 +1,23 @@
+{
+  "name": "SPY bull call spread: $10 wide, 4.95 debit, 2 monthly expirations",
+  "type": "spreads",
+  "params": {
+    "offset": 0.017,
+    "width": 10.0,
+    "dte": 60,
+    "target": 0.99,
+    "stop": 0.0,
+    "cadence": "expiry",
+    "trend_ma": 200,
+    "risk": 0.1,
+    "iv_mult": 1.0,
+    "slip": 0.05,
+    "commission": 0.65,
+    "rate": -1.0,
+    "div_yield": 0.014,
+    "fixed_debit": 4.95,
+    "strike_mode": "debit",
+    "target_div": 0.95
+  },
+  "note": "Your routine: every third Friday, buy the SPY call spread that costs 4.95 ($10 wide, expiring on the monthly expiration two months out), only while SPY is above its 200-day average. Close at 9.90 (9.50 in dividend months) or at expiry. Priced with Black-Scholes using the VIX; payoff at expiry exact."
+}

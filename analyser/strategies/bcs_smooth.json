@@ -1,0 +1,23 @@
+{
+  "name": "SPY call spread variant: in the money, 60 days, take profit at 80%, 50% stop, above 200-day",
+  "type": "spreads",
+  "note": "From the tune, the smoothest family: every third Friday buy the $10 spread that costs $6.00, two monthly expirations out, close at $8.00 or when it has lost 50% of the debit, only above the 200-day average. Lower return, much smaller drops; both exits depend on the modelled marks, so this one leans on the model most.",
+  "params": {
+    "offset": 0.017,
+    "width": 10.0,
+    "dte": 60,
+    "target": 0.8,
+    "stop": 0.5,
+    "cadence": "expiry",
+    "trend_ma": 200,
+    "risk": 0.1,
+    "iv_mult": 1.0,
+    "slip": 0.05,
+    "commission": 0.65,
+    "rate": -1.0,
+    "div_yield": 0.014,
+    "fixed_debit": 6.0,
+    "strike_mode": "debit",
+    "target_div": 0.95
+  }
+}

@@ -1,0 +1,9 @@
+# research (backtest/)
+beautifulsoup4==4.14.2
+numba==0.61.2
+numpy==2.2.6
+pandas==2.3.3
+pyarrow==21.0.0
+requests==2.32.5
+tqdm==4.67.1
+yfinance==0.2.66
