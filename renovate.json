@@ -1,0 +1,21 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Run weekly by the home-server repository's jobs/ stack (jobs/README.md there). One grouped PR for the base image and the PyPI pins, never automerged: the home server rebuilds this repository's image every morning from whatever is checked out.",
+  "extends": [
+    "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Everything in one branch and one PR. A major bump still gets its own PR.",
+      "matchPackageNames": [
+        "*"
+      ],
+      "groupName": "all dependencies",
+      "groupSlug": "all-dependencies",
+      "automerge": false,
+      "prBodyNotes": [
+        "After merging, on the home server: `git fetch && git log --stat HEAD..origin/main` in the checkout (only commits you made or merged), then `git pull`. The next 07:00 run builds and uses it; `sudo systemctl start home-server-stocks.service` to try it now."
+      ]
+    }
+  ]
+}
